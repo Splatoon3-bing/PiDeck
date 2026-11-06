@@ -836,6 +836,7 @@ export class AgentManager {
 						exitCode: diag?.exitCode ?? null,
 						spawnFailed: diag?.spawnFailed === true,
 						cwdMissing: diag?.cwdMissing === true,
+						cwdMissingAtSpawn: diag?.cwdMissingAtSpawn === true,
 						processStillRunning: fallbackInput.processStillRunning,
 						remote: remoteRuntime,
 						reason: remoteRuntime ? "remote runtime: extension fallback is a local-only concept" : describeExtensionFallbackSkip(fallbackInput),
@@ -5422,6 +5423,9 @@ export class AgentManager {
 		lines.push(`工作目录: ${diag.cwd}`);
 		if (diag.cwdMissing) {
 			lines.push("工作目录状态: ✗ 不存在 —— 这才是上面 spawn ENOENT 的真实原因" + "（Windows 会把「工作目录无效」误报成 cmd.exe 找不到，pi/cmd.exe 本身没问题）");
+		} else if (diag.cwdMissingAtSpawn) {
+			// 下发瞬间不可用、现已恢复：别把用户引去重新指定项目路径。
+			lines.push("工作目录状态: ⚠ 启动瞬间不可访问（现在已存在）—— 不是项目路径配错，重试即可");
 		}
 		// 「✗ 失败」只在真的探过 pi --version 时才成立；没探过就说没探过，
 		// 否则用户会被引去重装 pi（现场：真正原因其实是工作目录没了）。
@@ -5444,6 +5448,9 @@ export class AgentManager {
 			lines.push("1. 确认上面的工作目录是否真的存在（被移动/重命名/删除，或所在磁盘/网络盘未挂载）");
 			lines.push("2. 目录不存在时 pi 无法以该目录为工作目录启动，与 pi 是否安装无关");
 			lines.push("3. 在 PiDeck 中重新指定该项目的目录后重启会话");
+		} else if (diag.cwdMissingAtSpawn) {
+			lines.push("1. 工作目录现在可访问，直接在会话里重试启动");
+			lines.push("2. 若反复出现，检查是否有进程在瞬时间替换/卸载该项目目录（重建 checkout、容器挂载竞争、备份/同步工具接管）");
 		} else if (versionCheckFailed) {
 			lines.push("1. 在终端执行 pi --version，确认 pi 是否已安装且路径正确");
 			lines.push("2. 如未安装，执行 npm install -g @earendil-works/pi-coding-agent");

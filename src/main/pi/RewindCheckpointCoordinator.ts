@@ -1,5 +1,5 @@
 import type { RewindCheckpointHealth } from "../../shared/types";
-import { createCheckpoint, MIN_CHECKPOINT_INTERVAL_MS, pruneCheckpoints, pruneOldSessions, PRUNE_CURRENT_MIN_INTERVAL_MS, PRUNE_OLD_SESSIONS_MIN_INTERVAL_MS } from "../rewind/index.ts";
+import { createCheckpoint, isGitWorkTree, MIN_CHECKPOINT_INTERVAL_MS, pruneCheckpoints, pruneOldSessions, PRUNE_CURRENT_MIN_INTERVAL_MS, PRUNE_OLD_SESSIONS_MIN_INTERVAL_MS } from "../rewind/index.ts";
 
 /** 协调器需要的最小 runtime 形状（AgentManager 注入 agents 表的投影）。 */
 export interface RewindAgentSessionInfo {
@@ -10,6 +10,9 @@ export interface RewindAgentSessionInfo {
 
 /** 非 git 仓库的打点重试冷却：目录可能后续才 git init，不能永久放弃。 */
 const NO_GIT_RETRY_INTERVAL_MS = 30 * 60 * 1000;
+
+/** 写进健康状态的「不是 git 工作树」原因（供诊断/日志，UI 显示专门的 noGit 文案）。 */
+const NOT_A_GIT_WORKTREE_MESSAGE = "working directory is not a git work tree";
 
 /** 宿主注入：runtime 查询、WSL root 归一化、活跃会话枚举与日志（AgentManager 适配）。 */
 export interface RewindCheckpointHost {
@@ -131,6 +134,16 @@ export class RewindCheckpointCoordinator {
 		state.inFlight = true;
 		state.lastAt = Date.now();
 		try {
+			// 非 git 工作树先探测再打点：结论来自 git 退出码，不看报错文案。
+			// 改前靠 /not a git repository/i 匹配错误串，中文 locale 下 git 输出
+			// 「fatal: 不是 Git 仓库」永不命中 → #373 的冷却失效 → 每个工具动作都重跑
+			// 一轮注定失败的快照并写一条 warn（实测单日 382 条）。
+			if (!(await isGitWorkTree(root))) {
+				const wasNoGit = this.healthByRoot.get(root)?.lastErrorKind === "no-git";
+				this.recordHealth(root, new Error(NOT_A_GIT_WORKTREE_MESSAGE), "no-git");
+				this.enterNoGitCooldown(root, agentId, toolName, wasNoGit);
+				return;
+			}
 			const result = await createCheckpoint({
 				root,
 				// id 拼进 git ref 名，必须是 isRewindCheckpointId 允许的安全字符。
@@ -164,17 +177,11 @@ export class RewindCheckpointCoordinator {
 		} catch (error: unknown) {
 			const wasNoGit = this.healthByRoot.get(root)?.lastErrorKind === "no-git";
 			this.recordHealth(root, error);
-			// 非 git 仓库（#373）：失败原因不变、重试无收益，所以只说明一次并进入冷却，
+			// 非 git 工作树（#373）：失败原因不变、重试无收益，所以只说明一次并进入冷却，
 			// 不再每轮写一行同样的 warn（实测单日 52 次，占全部失败 70%）。
+			// 这里只是保底（探测与快照之间目录可能刚被删掉）：正常路径在探测处就拦下了。
 			if (this.healthByRoot.get(root)?.lastErrorKind === "no-git") {
-				this.noGitRetryAt.set(root, Date.now() + NO_GIT_RETRY_INTERVAL_MS);
-				if (!wasNoGit) {
-					this.host.logWarn("checkpoint disabled: working directory is not a git repository", {
-						agentId,
-						root,
-						retryAfterMinutes: Math.round(NO_GIT_RETRY_INTERVAL_MS / 60000),
-					});
-				}
+				this.enterNoGitCooldown(root, agentId, toolName, wasNoGit);
 				return;
 			}
 			// 错误串可能极长（git add 会把全部路径 + CRLF 警告写进一条消息，实测 9KB+），
@@ -265,8 +272,26 @@ export class RewindCheckpointCoordinator {
 		return [...ids];
 	}
 
-	/** 更新工作目录的打点健康状态（成功清零；失败累计并保留最近原因）。 */
-	private recordHealth(root: string, error: unknown): void {
+	/**
+	 * 进入非 git 工作树的冷却期，只在首次判定时写一条说明（重复失败不刷屏）。
+	 * 冷却而非永久放弃：用户可能稍后 git init，或在别的分支里继续工作。
+	 */
+	private enterNoGitCooldown(root: string, agentId: string, toolName: string, wasNoGit: boolean): void {
+		this.noGitRetryAt.set(root, Date.now() + NO_GIT_RETRY_INTERVAL_MS);
+		if (wasNoGit) return;
+		this.host.logWarn("checkpoint disabled: working directory is not a git repository", {
+			agentId,
+			toolName,
+			root,
+			retryAfterMinutes: Math.round(NO_GIT_RETRY_INTERVAL_MS / 60000),
+		});
+	}
+
+	/**
+	 * 更新工作目录的打点健康状态（成功清零；失败累计并保留最近原因）。
+	 * kind 用于已经自带结论的调用方（工作树探测），避免再对错误文案做 locale 敏感的匹配。
+	 */
+	private recordHealth(root: string, error: unknown, kind?: "no-git" | "other"): void {
 		const health = this.healthByRoot.get(root) ?? { consecutiveFailures: 0 };
 		if (error === null) {
 			health.lastSuccessAt = Date.now();
@@ -279,7 +304,8 @@ export class RewindCheckpointCoordinator {
 			health.lastErrorAt = Date.now();
 			health.consecutiveFailures += 1;
 			health.lastError = message;
-			health.lastErrorKind = /not a git repository/i.test(message) ? "no-git" : "other";
+			// 保底文案匹配：git 的这句话会随 locale 变形（英文 / 中文），两种都要认。
+			health.lastErrorKind = kind ?? (/not a git repo(sitory)?|不是 Git 仓库/i.test(message) ? "no-git" : "other");
 		}
 		this.healthByRoot.set(root, health);
 	}
