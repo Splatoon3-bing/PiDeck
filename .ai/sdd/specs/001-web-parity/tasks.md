@@ -362,6 +362,19 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 
 ## Progress Log
 
+### 2026-11-07 — T6 S4（Web 终端 UI + E2E）
+
+- 投影新增只读 `terminalEnabled`（`SafeWebSettings`，不进 `WebWritableSettings`）：Web UI 据此决定是否显示入口；写入该键仍 400。
+- 新增 `useWebTerminal.ts`：WS 协议控制器（create/input/resize/close + 帧解析 + 断线状态），**不自动重连**（重连=新 PTY）。
+- 新增 `WebTerminalPanel.tsx`：xterm 动态加载（C20）、每 tab 一个实例（切换保 scrollback）、输出按 tabId 写入、ResizeObserver refit、断线提示 + 重新连接、390px 无横向溢出。
+- 工作区抽屉新增第 4 个面板「终端」：仅 `terminalEnabled` 时显示；首次切到该面板才建立连接（打开工作区不会白开 PTY）；切面板保持连接，关闭抽屉/切项目断开。
+- i18n 16 个键三语 + `genZhTwCopy`。
+- 修复：`registerWebRoutes` 把 `projectStore.get` 作为未绑定方法传给 Web 专用 manager，运行期 `this.assertReadable is not a function`（ProjectStore 实例字段丢失）；改 `(projectId) => deps.projects.get(projectId)`。
+- E2E：`e2e/web-terminal.spec.ts`（启用：真实 PTY 回显 + 关闭 tab；390px 无溢出；禁用：入口不出现）3 条全绿。
+- 验证：typecheck 0 错；针对性单测 184 条全绿；四条 Web E2E **14 passed / 1 skipped**；build + check:format 通过。
+- 巨文件：`WebChatApp.tsx` 1640、`main/index.ts` 8021（均未超过既有基线）；新增面板 196 行、hook 207 行。
+- 明确未做（S5）：`docs/host-boundaries.md` 增条目、部署走查（反向代理 Upgrade）、手动手机走查、`.status` 收尾。
+
 ### 2026-11-07 — T6 S2（接 PTY：create/input/resize/close + 归属）
 
 - 新增 `src/main/terminal/terminalTarget.ts`：`parseTerminalTarget` / `parseTerminalShell` 从 terminalIpc 抽出，桌面 IPC 与 Web 终端共用同一套 target/shell 校验（C4，避免两套漂移）。

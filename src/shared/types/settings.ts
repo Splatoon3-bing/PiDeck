@@ -1194,6 +1194,11 @@ export type SafeWebSettings = {
 	sendShortcut: SendShortcutMode;
 	/** 流式输出时是否自动展开中间过程 */
 	expandInterimDuringStream: boolean;
+	/**
+	 * Web 终端是否开启（**只读**投影，供 Web UI 决定是否显示终端入口）。
+	 * 不在 `WebWritableSettings` 里：浏览器不能给自己开终端（T6 评审 C1）。
+	 */
+	terminalEnabled: boolean;
 };
 
 /**

@@ -1,6 +1,6 @@
 # T6 Web 终端 — 安全评审（实施前）
 
-> Status: **S1/S2 已实施（2026-11-07）**：开关 + 握手四校验 + 帧协议 + 独立 manager 接 PTY（归属/上限/背压/清理）；剩 S3–S5。
+> Status: **S1/S2/S4 已实施（2026-11-07）**：开关 + 握手四校验 + 帧协议 + 独立 manager 接 PTY + Web UI/E2E；剩 S3（协议边界补充）与 S5（文档/部署走查）。
 > Scope: `tasks.md` T6 / `design.md` §4.6 / `requirements.md` FR-010、NFR-001、NFR-007
 > Last Updated: 2026-11-07
 

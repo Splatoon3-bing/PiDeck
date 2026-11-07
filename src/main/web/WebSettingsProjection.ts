@@ -115,5 +115,6 @@ export function toSafeWebSettings(settings: AppSettings): SafeWebSettings {
 		defaultAgentBackendDesktopOnly: settings.defaultAgentBackend !== "pi" && settings.defaultAgentBackend !== "dsh",
 		sendShortcut: settings.sendShortcut,
 		expandInterimDuringStream: settings.expandInterimDuringStream !== false,
+		terminalEnabled: settings.webTerminalEnabled === true,
 	};
 }

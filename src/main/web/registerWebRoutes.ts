@@ -163,7 +163,8 @@ export function registerWebRoutes(deps: WebRoutesRegistration): void {
 			if (channel === ipcChannels.terminalData) terminalRoutes?.dispatchTerminalEvent("data", payload);
 			else if (channel === ipcChannels.terminalExit) terminalRoutes?.dispatchTerminalEvent("exit", payload);
 		},
-		{ get: deps.projects.get },
+		// 注意：必须重新绑定调用方，直接传 deps.projects.get 会丢 this（ProjectStore.get 内部读实例字段）。
+		{ get: (projectId) => deps.projects.get(projectId) },
 		// WSL 终端的身份只来自项目档案（与桌面一致，不读旧全局开关）。
 		() => ({}),
 	);

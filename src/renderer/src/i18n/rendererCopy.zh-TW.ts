@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: 96db4af3c168924482d72f63d1c8b5d89ff827053c070348ab31086ad6ef3676（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 97d9175ac92a1327af2bf243fe36b279f921b5f7d3ada734a383f4055f4c23b7（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -6732,6 +6732,22 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.panelFiles": "檔案",
 	"web.panelGit": "Git",
 	"web.panelNotes": "草稿本",
+	"web.panelTerminal": "終端",
+	"web.terminalNew": "新建終端",
+	"web.terminalCloseTab": "關閉終端",
+	"web.terminalExited": "已退出",
+	"web.terminalConnecting": "正在連線終端…",
+	"web.terminalDisconnected": "終端已斷開，請重新連線",
+	"web.terminalReconnect": "重新連線",
+	"web.terminalLoadFailed": "終端元件載入失敗，請重新整理頁面重試",
+	"web.terminalDisabled": "桌面端未開啟 Web 終端",
+	"web.terminalUnauthorized": "訪問令牌無效，請重新開啟分享連結",
+	"web.terminalOriginRejected": "來源校驗未通過，請用同一域名訪問",
+	"web.terminalLimit": "終端數量已達上限（每端 4 個 / 全域 16 個）",
+	"web.terminalProjectUnsupported": "該專案不支援終端",
+	"web.terminalProjectNotFound": "專案不存在或已移除",
+	"web.terminalCreateFailed": "終端建立失敗，請確認 shell 可用",
+	"web.terminalFailed": "終端連線失敗",
 	"web.filesUp": "上一級",
 	"web.filesFilter": "篩選當前目錄",
 	"web.filesNoMatch": "沒有匹配的檔案",

@@ -1593,7 +1593,9 @@ export function WebChatApp() {
 				/>
 			</main>
 			{/* 桌面工作区与会话并排，移动端仍是覆盖式抽屉。 */}
-			{workspaceOpen && activeSession ? <WebWorkspaceDrawer projectId={activeSession.projectId} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} onOpenFile={openFilePreview} panel={workspacePanel} onSelectPanel={selectWorkspacePanel} /> : null}
+			{workspaceOpen && activeSession ? (
+				<WebWorkspaceDrawer projectId={activeSession.projectId} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} onOpenFile={openFilePreview} panel={workspacePanel} onSelectPanel={selectWorkspacePanel} terminalEnabled={webSettings.settings?.terminalEnabled === true} />
+			) : null}
 			{/* S6.3：DSH 工具面板（仅 dsh 会话头部按钮触发） */}
 			{/* 第二批：会话内搜索（Ctrl+K）与技能/扩展面板 */}
 			<WebSearchDialog open={searchOpen} onOpenChange={setSearchOpen} sessionId={activeSessionId} messages={messages} onJump={jumpToSearchHit} />

@@ -95,7 +95,7 @@ test("GET /api/settings returns the allowlisted projection only", async () => {
 	const result = await call(routes, "/api/settings");
 	assert.equal(result.handled, true);
 	assert.equal(result.status, 200);
-	assert.deepEqual(Object.keys(result.body.settings).sort(), ["chatFontSize", "defaultAgentBackend", "defaultAgentBackendDesktopOnly", "expandInterimDuringStream", "fontSize", "sendShortcut", "theme", "themeScheduleDarkStart", "themeScheduleLightStart", "uiFontSize"]);
+	assert.deepEqual(Object.keys(result.body.settings).sort(), ["chatFontSize", "defaultAgentBackend", "defaultAgentBackendDesktopOnly", "expandInterimDuringStream", "fontSize", "sendShortcut", "terminalEnabled", "theme", "themeScheduleDarkStart", "themeScheduleLightStart", "uiFontSize"]);
 	const serialized = JSON.stringify(result.body);
 	for (const secret of ["secret-token-value", "securityConfig", "acpTools", "terminalShells", "wslEnabled", "customPiPath", "/usr/bin/claude", "webTerminalEnabled"]) {
 		assert.equal(serialized.includes(secret), false, `projection leaked ${secret}`);
@@ -104,6 +104,9 @@ test("GET /api/settings returns the allowlisted projection only", async () => {
 	assert.equal(result.body.settings.defaultAgentBackend, "dsh");
 	// C1：Web 终端开关绝不能出现在投影里（只有桌面能开，浏览器不能给自己开终端）。
 	assert.equal("webTerminalEnabled" in result.body.settings, false);
+	// 只读开关状态可以下发（UI 用它决定是否显示入口），但写入仍必须 400。
+	assert.equal(result.body.settings.terminalEnabled, false);
+	assert.equal((await call(routes, "/api/settings", "POST", { terminalEnabled: true })).status, 400);
 });
 
 test("unknown keys are rejected with 400 and nothing is written", async () => {
