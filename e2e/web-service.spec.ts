@@ -2,7 +2,7 @@ import { test, expect } from "./mock-pi-fixture";
 
 /**
  * Web 服务 React 前端（A2）端到端：
- * fixture 预置 webServiceEnabled=true + webServicePort=8765（见 mock-pi-fixture）。
+ * fixture 预置 webServiceEnabled=true + webServicePort=8878（见 mock-pi-fixture）。
  * 覆盖：
  * 1) 加载 → 新建会话 → 发消息 → 流式渲染完整回复
  * 2) 思考/工具帧 → 折叠思考卡片 + 工具卡片渲染
@@ -14,7 +14,7 @@ test.use({
 	seedSettings: {
 		webServiceEnabled: true,
 		webServiceHost: "127.0.0.1",
-		webServicePort: 8765,
+		webServicePort: 8878,
 		// 默认 requiresAuth=true（安全默认收紧后），e2e 无 token 直访需显式关闭
 		webServiceRequiresAuth: false,
 	},
@@ -32,7 +32,7 @@ async function waitForHealthy(baseUrl: string): Promise<boolean> {
 test("web service: load, create session, send message and stream via /api/chat", async ({ app }) => {
 	test.setTimeout(120_000);
 
-	const baseUrl = "http://127.0.0.1:8765";
+	const baseUrl = "http://127.0.0.1:8878";
 	expect(await waitForHealthy(baseUrl)).toBe(true);
 
 	// 主窗口导航到 Web 服务根路径（Electron context 不支持 newPage）
@@ -62,7 +62,7 @@ test("web service: load, create session, send message and stream via /api/chat",
 test("web service: thinking and tool frames render as cards", async ({ app }) => {
 	test.setTimeout(120_000);
 
-	const baseUrl = "http://127.0.0.1:8765";
+	const baseUrl = "http://127.0.0.1:8878";
 	expect(await waitForHealthy(baseUrl)).toBe(true);
 
 	const page = await app.firstWindow();
@@ -88,7 +88,7 @@ test("web service: thinking and tool frames render as cards", async ({ app }) =>
 test("web service: switching sessions keeps history in per-id cache", async ({ app }) => {
 	test.setTimeout(120_000);
 
-	const baseUrl = "http://127.0.0.1:8765";
+	const baseUrl = "http://127.0.0.1:8878";
 	expect(await waitForHealthy(baseUrl)).toBe(true);
 
 	const page = await app.firstWindow();
@@ -124,7 +124,7 @@ test("web service: switching sessions keeps history in per-id cache", async ({ a
 test("web service: dark mode follows prefers-color-scheme", async ({ app }) => {
 	test.setTimeout(120_000);
 
-	const baseUrl = "http://127.0.0.1:8765";
+	const baseUrl = "http://127.0.0.1:8878";
 	expect(await waitForHealthy(baseUrl)).toBe(true);
 
 	const page = await app.firstWindow();
@@ -138,7 +138,7 @@ test("web service: dark mode follows prefers-color-scheme", async ({ app }) => {
 test("web service: mobile viewport does not overflow horizontally", async ({ app }) => {
 	test.setTimeout(120_000);
 
-	const baseUrl = "http://127.0.0.1:8765";
+	const baseUrl = "http://127.0.0.1:8878";
 	expect(await waitForHealthy(baseUrl)).toBe(true);
 
 	const page = await app.firstWindow();

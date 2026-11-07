@@ -10,17 +10,19 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve, dirname } from "node:path";
 import { open, readFile, stat } from "node:fs/promises";
-import type { CommitEntry, FileTreeNode, GitBranchInfo, PiExtensionListResult, PiExtensionSummary, PiSkillListResult, PiSkillSummary, Project, YaoPromptDetailResult, YaoPromptListResult } from "../../shared/types";
+import type { CommitEntry, FileTreeNode, GitBranchInfo, PiExtensionListResult, PiExtensionSummary, PiSkillListResult, PiSkillSummary, Project, ScratchPadScope, YaoPromptDetailResult, YaoPromptListResult } from "../../shared/types";
 // GitService 是本地实现：它返回的是「文件系统绑定」形状（绝对路径，没有渲染层的 ProjectFileTarget），
 // 由 gitIpc 在 IPC 边界装饰成 shared 的 GitResource/Target。Web 路由同样直接吃本地形状——
 // 这里不能声明成 GitResourceGroups，否则类型在说谎（运行时根本没有 target/displayPath）。
 import type { LocalGitResourceGroups, LocalGitWorkspaceFileDiff } from "../git/localGitTypes";
-import { assertProjectFileReadPath, FILE_OUTSIDE_PROJECT_ERROR } from "../files/projectFileAccess";
+import { assertProjectFileReadPath, createProjectFileReadBoundary, FILE_OUTSIDE_PROJECT_ERROR, resolveProjectFileWritePath } from "../files/projectFileAccess";
+import { INVALID_PROJECT_FILE_TARGET, resolveLocalProjectFileTarget } from "../files/projectFileTarget";
 import { isPathInsideProject } from "../fs/FileSystemService";
 import type { UserReadAccessVerdict } from "../security/policy";
-import { WEB_CORS_HEADERS } from "./WebHttpResponders";
+import { getAppLogger } from "../logging/sharedLogger";
+import { readJson, WebBodyTooLargeError, WebInvalidJsonError, WEB_CORS_HEADERS } from "./WebHttpResponders";
 
 export type WebWorkspaceRoutesDeps = {
 	/** projectId → 项目根解析（沿用 WebServiceManager 同源数据，避免第二套项目表）。 */
@@ -32,10 +34,36 @@ export type WebWorkspaceRoutesDeps = {
 		getStatus: (cwd: string) => Promise<LocalGitResourceGroups>;
 		getWorkspaceFileDiff: (cwd: string, group: "merge" | "index" | "workingTree" | "untracked", filePath: string, maxBytes: number) => Promise<LocalGitWorkspaceFileDiff | null>;
 		getCommitLog: (cwd: string, options?: { maxEntries?: number }) => Promise<CommitEntry[]>;
+		/** 写操作：只开 stage/unstage/commit（discard/reset/push 不在 Web 暴露）。 */
+		stageFiles?: (cwd: string, paths: string[]) => Promise<void>;
+		unstageFiles?: (cwd: string, paths: string[]) => Promise<void>;
+		commit?: (cwd: string, message: string) => Promise<void>;
+		/** 分支：列表/切换/新建/fetch（push/pull 留到独立评审）。 */
+		checkout?: (cwd: string, branch: string) => Promise<GitBranchInfo>;
+		createBranch?: (cwd: string, branch: string) => Promise<GitBranchInfo>;
+		fetch?: (cwd: string) => Promise<void>;
 	};
 	/** 文件树能力（FileSystemService 注入；缺省时 files 路由返回 503）。 */
 	files?: {
 		listTree: (root: string, maxDepth?: number, directory?: string) => Promise<FileTreeNode[]>;
+		/** 项目内文件管理：与桌面 filesIpc 同一实现（删除走回收站）。缺省时写路由 503。 */
+		create?: (parentDir: string, name: string, type: "file" | "directory") => Promise<string>;
+		rename?: (targetPath: string, newName: string) => Promise<string>;
+		delete?: (targetPath: string, recursive?: boolean) => Promise<void>;
+		/**
+		 * 写入项目内文本文件（实现侧负责 realpath/symlink 边界与原子替换）。
+		 * expectedMtimeMs 提供时由实现侧做「文件是否被外部改动」的冲突校验；force 跳过。
+		 * Web 端只允许相对路径，且不新建文件——避免把浏览器变成任意写盘通道。
+		 */
+		writeFile?: (root: string, relativePath: string, content: string, options?: { expectedMtimeMs?: number; force?: boolean }) => Promise<{ mtimeMs: number }>;
+	};
+	/** 草稿本能力（ScratchPadService 注入；缺省时 scratchpad 路由返回 503）。 */
+	scratchPad?: {
+		list: (scope: ScratchPadScope) => Promise<WebScratchPadDraft[]>;
+		create: (scope: ScratchPadScope) => Promise<WebScratchPadDraft>;
+		load: (scope: WebScratchPadScope, id: string, projectId?: string) => Promise<{ content: string; lastEditedAt: number }>;
+		save: (scope: WebScratchPadScope, id: string, content: string, projectId?: string) => Promise<{ mtimeMs: number }>;
+		delete: (scope: WebScratchPadScope, id: string, projectId?: string) => Promise<void>;
 	};
 	/** 提示词库（XuePromptManager 注入；缺省时 prompts 路由返回 503）。 */
 	prompts?: {
@@ -57,8 +85,21 @@ export type WebWorkspaceRoutesDeps = {
 	userReadAccess?: (input: { filePath: string; cwd: string; projectRoot: string; sessionId?: string }) => UserReadAccessVerdict;
 };
 
+export type WebScratchPadScope = "global" | "project";
+
+/** Web 端草稿元信息：不暴露宿主绝对路径（path 是主进程内部概念）。 */
+export type WebScratchPadDraft = { id: string; name: string; createdAt: number; updatedAt: number; scope: WebScratchPadScope };
+
 /** 文件内容读取上限：2MB 以内完整返回（Web 端轻量预览的边界）。 */
 const MAX_FILE_CONTENT_BYTES = 2 * 1024 * 1024;
+/** Web 端可保存的文本上限（与读取上限一致；超出请回桌面/终端处理）。 */
+const MAX_FILE_WRITE_BYTES = 2 * 1024 * 1024;
+/** 草稿保存上限：草稿本是随手记，1MB 足够，避免浏览器当大文件编辑器。 */
+const MAX_SCRATCHPAD_BYTES = 1024 * 1024;
+/** 单次提交消息上限。 */
+const MAX_COMMIT_MESSAGE_CHARS = 5000;
+/** 单次 stage/unstage 文件数上限。 */
+const MAX_GIT_PATHS = 500;
 /** 超过上限时不再空手而归：有界读前 512KB 给截断预览（移动端定位问题够用，也避免大文件整读的内存峰值）。 */
 const TRUNCATED_PREVIEW_BYTES = 512 * 1024;
 /** 单次 diff 上限：1MB（原 256KB 对合并冲突/大重构文件偏紧，超限时 GitService 返回 null 会让用户深以为文件丢了）。 */
@@ -168,12 +209,60 @@ function sendError(response: ServerResponse, status: number, code: string, messa
 	sendJson(response, status, { code, message, ...details });
 }
 
+/**
+ * 写操作审计（脱敏）：只记操作类型/项目/目标路径/结果与错误码。
+ * NFR-008：Web 端第一次能改主机状态，日志里必须能回答「谁在什么时候删了哪个路径」。
+ * 不记正文、不记 Git stderr 原文、不记凭据。
+ */
+function logWebWrite(namespace: "web-files" | "web-git", op: string, details: Record<string, unknown>): void {
+	void getAppLogger()?.info(namespace, `Web ${op}`, details);
+}
+
+/** 请求体哨兵：由 WebHttpResponders 抛出，这里按 name 判定（测试/多 realm 下 instanceof 不可靠）。 */
+function bodyErrorName(error: unknown): "tooLarge" | "invalidJson" | null {
+	if (typeof error !== "object" || error === null) return null;
+	const name = (error as { name?: unknown }).name;
+	if (name === "WebBodyTooLargeError") return "tooLarge";
+	if (name === "WebInvalidJsonError") return "invalidJson";
+	return null;
+}
+
 /** `~/x` / `~\\x` 按当前用户家目录展开（消息里的配置/临时文件路径大多写成 ~ 形式）。 */
 function expandHomePath(path: string): string {
 	if (!path.startsWith("~")) return path;
 	const rest = path.slice(1);
 	if (!rest.startsWith("/") && !rest.startsWith("\\")) return path;
 	return join(homedir(), rest.slice(1));
+}
+
+/**
+ * 文件/目录名校验：只允许纯文件名。
+ * 桌面 `FileSystemService` 也有同源校验；Web 路由先挡一道，避免把非法名
+ * 一路带到 fs 才失败（错误码也更可读）。
+ */
+function assertEntryName(raw: unknown): string {
+	if (typeof raw !== "string") throw new Error("INVALID_FILE_NAME");
+	const name = raw.trim();
+	if (!name || name.length > 255 || name === "." || name === "..") throw new Error("INVALID_FILE_NAME");
+	if (/[\\/\u0000-\u001f]/.test(name) || /[. ]$/.test(name)) throw new Error("INVALID_FILE_NAME");
+	// Windows 设备名：即使当前在 Linux 部署，Web 端也可能连线到 Windows 宿主。
+	if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(name)) throw new Error("INVALID_FILE_NAME");
+	return name;
+}
+
+/** Git 分支名校验（在 GitService 的 check-ref-format 之前先给可读的 400）。 */
+function assertBranchName(raw: unknown): string {
+	if (typeof raw !== "string") throw new Error("INVALID_BRANCH_NAME");
+	const name = raw.trim();
+	if (!name || name.length > 255 || name.startsWith("-")) throw new Error("INVALID_BRANCH_NAME");
+	if (/[\u0000-\u001f ~^:?*[\\]/.test(name) || name.includes("..") || name.includes("@{") || name === "@") throw new Error("INVALID_BRANCH_NAME");
+	if (name.endsWith("/") || name.endsWith(".") || name.endsWith(".lock") || name.split("/").some((segment) => !segment || segment.startsWith("."))) throw new Error("INVALID_BRANCH_NAME");
+	return name;
+}
+
+/** 工作区变更总数（用于切换分支前的脏检查）。 */
+function countGitChanges(groups: { merge: unknown[]; index: unknown[]; workingTree: unknown[]; untracked: unknown[] }): number {
+	return groups.merge.length + groups.index.length + groups.workingTree.length + groups.untracked.length;
 }
 
 export class WebWorkspaceRoutes {
@@ -184,10 +273,27 @@ export class WebWorkspaceRoutes {
 		if (!url.pathname.startsWith("/api/")) return false;
 		try {
 			if (url.pathname === "/api/git/status") return await this.gitStatus(url, response);
+			if (url.pathname === "/api/git/branches" && request.method === "GET") return await this.gitBranches(url, response);
+			if (url.pathname === "/api/git/checkout" && request.method === "POST") return await this.gitCheckout(request, response);
+			if (url.pathname === "/api/git/fetch" && request.method === "POST") return await this.gitFetch(request, response);
 			if (url.pathname === "/api/git/diff") return await this.gitDiff(url, response);
 			if (url.pathname === "/api/git/log") return await this.gitLog(url, response);
 			if (url.pathname === "/api/files") return await this.listFiles(url, response);
-			if (url.pathname === "/api/file-content") return await this.fileContent(url, response);
+			if (url.pathname === "/api/files/create" && request.method === "POST") return await this.createEntry(request, response);
+			if (url.pathname === "/api/files/rename" && request.method === "POST") return await this.renameEntry(request, response);
+			if (url.pathname === "/api/files/delete" && request.method === "POST") return await this.deleteEntry(request, response);
+			if (url.pathname === "/api/file-content" && request.method === "GET") return await this.fileContent(url, response);
+			if (url.pathname === "/api/file-content" && request.method === "POST") return await this.writeFileContent(request, response);
+			if (url.pathname === "/api/git/stage" && request.method === "POST") return await this.gitStage(request, response);
+			if (url.pathname === "/api/git/unstage" && request.method === "POST") return await this.gitUnstage(request, response);
+			if (url.pathname === "/api/git/commit" && request.method === "POST") return await this.gitCommit(request, response);
+			if (url.pathname === "/api/scratchpad" && request.method === "GET") return await this.scratchPadList(url, response);
+			if (url.pathname === "/api/scratchpad/create" && request.method === "POST") return await this.scratchPadCreate(request, response);
+			const scratchPadMatch = url.pathname.match(/^\/api\/scratchpad\/([^/]+)$/);
+			if (scratchPadMatch && request.method === "GET") return await this.scratchPadLoad(scratchPadMatch[1], url, response);
+			if (scratchPadMatch && request.method === "DELETE") return await this.scratchPadDelete(scratchPadMatch[1], url, response);
+			const scratchPadSaveMatch = url.pathname.match(/^\/api\/scratchpad\/([^/]+)\/save$/);
+			if (scratchPadSaveMatch && request.method === "POST") return await this.scratchPadSave(scratchPadSaveMatch[1], request, response);
 			if (url.pathname === "/api/prompts") return await this.listPrompts(url, response);
 			const promptDetailMatch = url.pathname.match(/^\/api\/prompts\/([^/]+)$/);
 			if (promptDetailMatch) return await this.promptDetail(promptDetailMatch[1], url, response);
@@ -197,6 +303,16 @@ export class WebWorkspaceRoutes {
 			if (url.pathname === "/api/extensions/toggle" && request.method === "POST") return await this.toggleExtension(request, response);
 			return false;
 		} catch (error) {
+			// 请求体超限/非法 JSON 是客户端错误：不能降级成 500（与 WebServiceManager 的统一映射同码）。
+			const bodyError = bodyErrorName(error);
+			if (bodyError === "tooLarge") {
+				sendError(response, 413, "webError.bodyTooLarge", "payload too large");
+				return true;
+			}
+			if (bodyError === "invalidJson") {
+				sendError(response, 400, "webError.invalidJson", "Request body is not valid JSON");
+				return true;
+			}
 			const message = typeof error === "object" && error !== null && "message" in error ? String((error as { message: unknown }).message) : "workspace route failed";
 			sendError(response, 500, "webError.internal", message);
 			return true;
@@ -226,6 +342,107 @@ export class WebWorkspaceRoutes {
 		}
 		const [branch, groups] = await Promise.all([this.deps.git.getBranches(root), this.deps.git.getStatus(root)]);
 		sendJson(response, 200, { repo: true, branch, groups });
+		return true;
+	}
+
+	/** 分支列表（与 status 同源，单独入口给分支下拉刷新用）。 */
+	private async gitBranches(url: URL, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.git) {
+			sendError(response, 503, "webError.gitUnavailable", "git service is not available");
+			return true;
+		}
+		const root = this.projectRoot(url.searchParams.get("projectId"));
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		const repo = await this.deps.git.isGitRepo(root);
+		if (!repo) {
+			sendJson(response, 200, { repo: false });
+			return true;
+		}
+		const branch = await this.deps.git.getBranches(root);
+		sendJson(response, 200, { repo: true, ...branch });
+		return true;
+	}
+
+	/**
+	 * 切换/新建并切换分支。
+	 * 脏工作区默认 409（由前端二次确认后带 force=true 重试）——git checkout 在冲突时
+	 * 会拒绝，但“静默带走未提交改动”更隐蔽，先让用户明确选择。
+	 */
+	private async gitCheckout(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.git?.checkout || !this.deps.git.createBranch) {
+			sendError(response, 503, "webError.gitUnavailable", "git service is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		const projectId = typeof body.projectId === "string" ? body.projectId : null;
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		try {
+			const branchName = assertBranchName(body.branch);
+			const create = body.create === true;
+			const force = body.force === true;
+			if (!(await this.deps.git.isGitRepo(root))) {
+				sendError(response, 400, "webError.gitNoRepo", "project is not a git repository");
+				return true;
+			}
+			const before = await this.deps.git.getBranches(root);
+			// 已经是当前分支：不触发脏检查（没有实际切换动作）。
+			if (!create && before.current === branchName) {
+				sendJson(response, 200, { ok: true, ...before });
+				return true;
+			}
+			if (!create && !before.branches.includes(branchName)) {
+				sendError(response, 400, "webError.gitBranchNotFound", "branch not found");
+				return true;
+			}
+			const changes = countGitChanges(await this.deps.git.getStatus(root));
+			if (changes > 0 && !force) {
+				sendError(response, 409, "webError.gitDirtyWorktree", `worktree has ${changes} uncommitted change(s)`);
+				return true;
+			}
+			const info = create ? await this.deps.git.createBranch(root, branchName) : await this.deps.git.checkout(root, branchName);
+			logWebWrite("web-git", create ? "branch.create" : "branch.checkout", { projectId, branch: branchName, forced: force, status: 200 });
+			sendJson(response, 200, { ok: true, ...info });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logWebWrite("web-git", "branch.checkout.failed", { projectId, branch: typeof body.branch === "string" ? body.branch : "", status: 400 });
+			if (message === "INVALID_BRANCH_NAME") sendError(response, 400, "webError.invalidRequest", message);
+			else sendError(response, 400, "webError.gitCheckoutFailed", message);
+		}
+		return true;
+	}
+
+	/** fetch 远端（不合并、不改工作区）；push/pull 不在 Web 暴露。 */
+	private async gitFetch(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.git?.fetch) {
+			sendError(response, 503, "webError.gitUnavailable", "git service is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		const projectId = typeof body.projectId === "string" ? body.projectId : null;
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		try {
+			if (!(await this.deps.git.isGitRepo(root))) {
+				sendError(response, 400, "webError.gitNoRepo", "project is not a git repository");
+				return true;
+			}
+			await this.deps.git.fetch(root);
+			logWebWrite("web-git", "fetch", { projectId, status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			logWebWrite("web-git", "fetch.failed", { projectId, status: 400 });
+			sendError(response, 400, "webError.gitFetchFailed", error instanceof Error ? error.message : "fetch failed");
+		}
 		return true;
 	}
 
@@ -300,6 +517,159 @@ export class WebWorkspaceRoutes {
 			hasChildren: node.hasChildren,
 		}));
 		sendJson(response, 200, { nodes: safeNodes });
+		return true;
+	}
+
+	/** 文件管理错误 → 结构化 HTTP 响应（路径/名称/不存在/已存在/权限）。同时记一条审计。 */
+	private sendEntryError(response: ServerResponse, error: unknown, op: "create" | "rename" | "delete", context: { projectId: string; path: string }): void {
+		const message = error instanceof Error ? error.message : String(error);
+		const log = (status: number, code: string) => logWebWrite("web-files", op, { ...context, status, code });
+		if (message === INVALID_PROJECT_FILE_TARGET || message === "INVALID_FILE_NAME") {
+			log(400, "webError.invalidRequest");
+			sendError(response, 400, "webError.invalidRequest", message);
+			return;
+		}
+		if (message === FILE_OUTSIDE_PROJECT_ERROR) {
+			log(403, "webError.fileOutsideProject");
+			sendError(response, 403, "webError.fileOutsideProject", "path escapes project root");
+			return;
+		}
+		const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "";
+		if (code === "ENOENT") {
+			log(404, "webError.fileNotFound");
+			sendError(response, 404, "webError.fileNotFound", "file or directory not found");
+			return;
+		}
+		if (code === "EEXIST") {
+			log(409, "webError.fileExists");
+			sendError(response, 409, "webError.fileExists", "target already exists");
+			return;
+		}
+		if (code === "EACCES" || code === "EPERM") {
+			log(403, "webError.fileAccessDenied");
+			sendError(response, 403, "webError.fileAccessDenied", "permission denied");
+			return;
+		}
+		log(400, "webError.fileOperationFailed");
+		sendError(response, 400, "webError.fileOperationFailed", message);
+	}
+
+	/** 新建文件/目录（项目内相对路径；同名拒绝，不覆盖）。 */
+	private async createEntry(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.files?.create) {
+			sendError(response, 503, "webError.filesUnavailable", "file service is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		const projectId = typeof body.projectId === "string" ? body.projectId : null;
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		const kind = body.kind === "directory" ? "directory" : body.kind === "file" ? "file" : null;
+		if (!kind) {
+			sendError(response, 400, "webError.invalidRequest", "kind must be file or directory");
+			return true;
+		}
+		const dir = typeof body.dir === "string" ? body.dir : "";
+		try {
+			const lexicalParent = resolveLocalProjectFileTarget(root, dir);
+			const parentInfo = await stat(lexicalParent).catch(() => null);
+			if (!parentInfo?.isDirectory()) {
+				sendError(response, 404, "webError.fileNotFound", "parent directory not found");
+				return true;
+			}
+			const name = assertEntryName(body.name);
+			// realpath 边界：项目内的 symlink 目录可以指向项目外，只做词法 resolve + startsWith
+			// 会把「新建文件」变成越界写盘（桌面 LocalProjectFileBackend 走同一条 resolveProjectFileWritePath）。
+			const boundary = await createProjectFileReadBoundary(root);
+			const target = await resolveProjectFileWritePath(boundary, join(lexicalParent, name));
+			if (await stat(target).catch(() => null)) {
+				sendError(response, 409, "webError.fileExists", "target already exists");
+				return true;
+			}
+			await this.deps.files.create(dirname(target), basename(target), kind);
+			logWebWrite("web-files", "create", { projectId, dir, name, kind, status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			this.sendEntryError(response, error, "create", { projectId: projectId ?? "", path: dir });
+		}
+		return true;
+	}
+
+	/** 重命名（只改父目录内的纯文件名；目标已存在时拒绝，不覆盖）。 */
+	private async renameEntry(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.files?.rename) {
+			sendError(response, 503, "webError.filesUnavailable", "file service is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		const projectId = typeof body.projectId === "string" ? body.projectId : null;
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		const relativePath = typeof body.path === "string" ? body.path : "";
+		try {
+			const boundary = await createProjectFileReadBoundary(root);
+			const source = await resolveProjectFileWritePath(boundary, resolveLocalProjectFileTarget(root, relativePath));
+			if (source === boundary.canonicalRoot || source === resolve(root)) {
+				sendError(response, 400, "webError.invalidRequest", "cannot rename the project root");
+				return true;
+			}
+			const name = assertEntryName(body.newName);
+			const target = await resolveProjectFileWritePath(boundary, join(dirname(source), name));
+			if (!(await stat(source).catch(() => null))) {
+				sendError(response, 404, "webError.fileNotFound", "file or directory not found");
+				return true;
+			}
+			if (await stat(target).catch(() => null)) {
+				sendError(response, 409, "webError.fileExists", "target already exists");
+				return true;
+			}
+			await this.deps.files.rename(source, name);
+			logWebWrite("web-files", "rename", { projectId, path: relativePath, newName: name, status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			this.sendEntryError(response, error, "rename", { projectId: projectId ?? "", path: relativePath });
+		}
+		return true;
+	}
+
+	/** 删除（走系统回收站；拒绝删除项目根）。 */
+	private async deleteEntry(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.files?.delete) {
+			sendError(response, 503, "webError.filesUnavailable", "file service is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		const projectId = typeof body.projectId === "string" ? body.projectId : null;
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		const relativePath = typeof body.path === "string" ? body.path : "";
+		try {
+			const boundary = await createProjectFileReadBoundary(root);
+			const target = await resolveProjectFileWritePath(boundary, resolveLocalProjectFileTarget(root, relativePath));
+			if (target === boundary.canonicalRoot || target === resolve(root)) {
+				sendError(response, 400, "webError.invalidRequest", "cannot delete the project root");
+				return true;
+			}
+			const info = await stat(target).catch(() => null);
+			if (!info) {
+				sendError(response, 404, "webError.fileNotFound", "file or directory not found");
+				return true;
+			}
+			await this.deps.files.delete(target, info.isDirectory());
+			logWebWrite("web-files", "delete", { projectId, path: relativePath, recursive: info.isDirectory(), status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			this.sendEntryError(response, error, "delete", { projectId: projectId ?? "", path: relativePath });
+		}
 		return true;
 	}
 
@@ -391,7 +761,259 @@ export class WebWorkspaceRoutes {
 			sendJson(response, 200, { binary: true, size: info.size });
 			return true;
 		}
-		sendJson(response, 200, { content: buffer.toString("utf8"), size: info.size });
+		sendJson(response, 200, { content: buffer.toString("utf8"), size: info.size, mtimeMs: info.mtimeMs });
+		return true;
+	}
+
+	/**
+	 * 写入项目内文本文件（Web 编辑器）。边界是三道：
+	 * 1) 路由层只接受相对路径、拒绝 `..` 与绝对路径、限制 2MB；
+	 * 2) 能力层做 realpath/symlink 校验并以原子替换写盘；
+	 * 3) expectedMtimeMs 不匹配时回 409，避免静默覆盖外部改动（用户可选 force）。
+	 */
+	private async writeFileContent(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.files?.writeFile) {
+			sendError(response, 503, "webError.filesUnavailable", "file write is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request, MAX_FILE_WRITE_BYTES + 64 * 1024);
+		const projectId = typeof body.projectId === "string" ? body.projectId : "";
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		const relativePath = typeof body.path === "string" ? body.path : "";
+		const content = typeof body.content === "string" ? body.content : null;
+		if (!relativePath.trim() || content === null) {
+			sendError(response, 400, "webError.invalidRequest", "path (string) and content (string) are required");
+			return true;
+		}
+		if (relativePath.length > 32_768 || isAbsolute(relativePath) || relativePath.split(/[\\/]/).includes("..")) {
+			sendError(response, 400, "webError.invalidRequest", "path must be a relative path inside the project");
+			return true;
+		}
+		if (Buffer.byteLength(content, "utf8") > MAX_FILE_WRITE_BYTES) {
+			sendError(response, 413, "webError.fileTooLarge", "content exceeds the 2MB write limit");
+			return true;
+		}
+		const expectedMtimeMs = typeof body.expectedMtimeMs === "number" && Number.isFinite(body.expectedMtimeMs) ? body.expectedMtimeMs : undefined;
+		const force = body.force === true;
+		try {
+			const result = await this.deps.files.writeFile(root, relativePath, content, { expectedMtimeMs, force });
+			sendJson(response, 200, { ok: true, mtimeMs: result.mtimeMs });
+		} catch (error) {
+			const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "";
+			if (code === "FILE_CHANGED") {
+				sendError(response, 409, "webError.fileChanged", "file has changed on disk");
+				return true;
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			if (message === "FILE_OUTSIDE_PROJECT") {
+				sendError(response, 403, "webError.fileOutsideProject", "path escapes project root");
+				return true;
+			}
+			sendError(response, 400, "webError.fileWriteFailed", message);
+		}
+		return true;
+	}
+
+	/** stage/unstage 共用的入参校验：项目存在、paths 为仓库内相对路径。 */
+	private readGitPaths(body: Record<string, unknown>): { root: string; paths: string[] } | { error: string; status: number; code: string } {
+		if (!this.deps.git?.stageFiles || !this.deps.git?.unstageFiles) {
+			return { error: "git service is not available", status: 503, code: "webError.gitUnavailable" };
+		}
+		const root = this.projectRoot(typeof body.projectId === "string" ? body.projectId : null);
+		if (!root) return { error: "project not found", status: 404, code: "webError.projectNotFound" };
+		const raw = body.paths;
+		if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_GIT_PATHS) {
+			return { error: "paths must be a non-empty array", status: 400, code: "webError.invalidRequest" };
+		}
+		const paths: string[] = [];
+		for (const entry of raw) {
+			if (typeof entry !== "string" || !entry.trim() || entry.length > 32_768 || isAbsolute(entry) || entry.split(/[\\/]/).includes("..")) {
+				return { error: "paths must be relative paths inside the repository", status: 400, code: "webError.invalidRequest" };
+			}
+			paths.push(entry);
+		}
+		return { root, paths };
+	}
+
+	private async gitStage(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		const body = await this.readJsonBody(request);
+		const parsed = this.readGitPaths(body);
+		if ("error" in parsed) {
+			sendError(response, parsed.status, parsed.code, parsed.error);
+			return true;
+		}
+		if (!this.deps.git?.stageFiles) {
+			sendError(response, 503, "webError.gitUnavailable", "git service is not available");
+			return true;
+		}
+		try {
+			await this.deps.git.stageFiles(parsed.root, parsed.paths);
+			logWebWrite("web-git", "stage", { projectId: typeof body.projectId === "string" ? body.projectId : "", fileCount: parsed.paths.length, status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			logWebWrite("web-git", "stage.failed", { projectId: typeof body.projectId === "string" ? body.projectId : "", status: 400 });
+			sendError(response, 400, "webError.gitStageFailed", error instanceof Error ? error.message : "stage failed");
+		}
+		return true;
+	}
+
+	private async gitUnstage(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		const body = await this.readJsonBody(request);
+		const parsed = this.readGitPaths(body);
+		if ("error" in parsed) {
+			sendError(response, parsed.status, parsed.code, parsed.error);
+			return true;
+		}
+		if (!this.deps.git?.unstageFiles) {
+			sendError(response, 503, "webError.gitUnavailable", "git service is not available");
+			return true;
+		}
+		try {
+			await this.deps.git.unstageFiles(parsed.root, parsed.paths);
+			logWebWrite("web-git", "unstage", { projectId: typeof body.projectId === "string" ? body.projectId : "", fileCount: parsed.paths.length, status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			logWebWrite("web-git", "unstage.failed", { projectId: typeof body.projectId === "string" ? body.projectId : "", status: 400 });
+			sendError(response, 400, "webError.gitUnstageFailed", error instanceof Error ? error.message : "unstage failed");
+		}
+		return true;
+	}
+
+	private async gitCommit(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.git?.commit) {
+			sendError(response, 503, "webError.gitUnavailable", "git service is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		const projectId = typeof body.projectId === "string" ? body.projectId : null;
+		const root = this.projectRoot(projectId);
+		if (!root) {
+			sendError(response, 404, "webError.projectNotFound", "project not found");
+			return true;
+		}
+		const message = typeof body.message === "string" ? body.message.trim() : "";
+		if (!message || message.length > MAX_COMMIT_MESSAGE_CHARS) {
+			sendError(response, 400, "webError.invalidRequest", `commit message must be 1-${MAX_COMMIT_MESSAGE_CHARS} characters`);
+			return true;
+		}
+		try {
+			await this.deps.git.commit(root, message);
+			// 只记消息长度，不记正文（提交信息可能含隐私）。
+			logWebWrite("web-git", "commit", { projectId, messageLength: message.length, status: 200 });
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			logWebWrite("web-git", "commit.failed", { projectId, messageLength: message.length, status: 400 });
+			sendError(response, 400, "webError.gitCommitFailed", error instanceof Error ? error.message : "commit failed");
+		}
+		return true;
+	}
+
+	/** 解析草稿作用域查询/请求体；项目作用域必须带有效 projectId。 */
+	private readScratchPadScope(source: { get?: (key: string) => string | null; body?: Record<string, unknown> }): ScratchPadScope {
+		const kind = source.get ? source.get("scope") : source.body?.scope;
+		if (kind === "project") {
+			const projectId = source.get ? source.get("projectId") : typeof source.body?.projectId === "string" ? source.body.projectId : "";
+			if (!projectId) throw new Error("projectId is required for project scope");
+			if (!this.projectRoot(projectId)) throw new Error("project not found");
+			return { kind: "project", projectId };
+		}
+		return { kind: "global" };
+	}
+
+	private scratchPadDraft(scope: ScratchPadScope): WebScratchPadScope {
+		return scope.kind === "project" ? "project" : "global";
+	}
+
+	private async scratchPadList(url: URL, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.scratchPad) {
+			sendError(response, 503, "webError.scratchPadUnavailable", "scratch pad is not available");
+			return true;
+		}
+		try {
+			const scope = this.readScratchPadScope({ get: (key) => url.searchParams.get(key) });
+			sendJson(response, 200, { drafts: await this.deps.scratchPad.list(scope) });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "invalid scope";
+			sendError(response, message === "project not found" ? 404 : 400, "webError.invalidRequest", message);
+		}
+		return true;
+	}
+
+	private async scratchPadCreate(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.scratchPad) {
+			sendError(response, 503, "webError.scratchPadUnavailable", "scratch pad is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request);
+		try {
+			const scope = this.readScratchPadScope({ body });
+			sendJson(response, 200, { draft: await this.deps.scratchPad.create(scope) });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "invalid scope";
+			sendError(response, message === "project not found" ? 404 : 400, "webError.invalidRequest", message);
+		}
+		return true;
+	}
+
+	private async scratchPadLoad(rawId: string, url: URL, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.scratchPad) {
+			sendError(response, 503, "webError.scratchPadUnavailable", "scratch pad is not available");
+			return true;
+		}
+		try {
+			const scope = this.readScratchPadScope({ get: (key) => url.searchParams.get(key) });
+			const data = await this.deps.scratchPad.load(this.scratchPadDraft(scope), decodeURIComponent(rawId), scope.kind === "project" ? scope.projectId : undefined);
+			sendJson(response, 200, data);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "load failed";
+			sendError(response, message === "project not found" ? 404 : 400, "webError.invalidRequest", message);
+		}
+		return true;
+	}
+
+	private async scratchPadSave(rawId: string, request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.scratchPad) {
+			sendError(response, 503, "webError.scratchPadUnavailable", "scratch pad is not available");
+			return true;
+		}
+		const body = await this.readJsonBody(request, MAX_SCRATCHPAD_BYTES + 64 * 1024);
+		const content = typeof body.content === "string" ? body.content : null;
+		if (content === null) {
+			sendError(response, 400, "webError.invalidRequest", "content (string) is required");
+			return true;
+		}
+		if (Buffer.byteLength(content, "utf8") > MAX_SCRATCHPAD_BYTES) {
+			sendError(response, 413, "webError.fileTooLarge", "draft exceeds the 1MB limit");
+			return true;
+		}
+		try {
+			const scope = this.readScratchPadScope({ body });
+			const result = await this.deps.scratchPad.save(this.scratchPadDraft(scope), decodeURIComponent(rawId), content, scope.kind === "project" ? scope.projectId : undefined);
+			sendJson(response, 200, { ok: true, mtimeMs: result.mtimeMs });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "save failed";
+			sendError(response, message === "project not found" ? 404 : 400, "webError.invalidRequest", message);
+		}
+		return true;
+	}
+
+	private async scratchPadDelete(rawId: string, url: URL, response: ServerResponse): Promise<boolean> {
+		if (!this.deps.scratchPad) {
+			sendError(response, 503, "webError.scratchPadUnavailable", "scratch pad is not available");
+			return true;
+		}
+		try {
+			const scope = this.readScratchPadScope({ get: (key) => url.searchParams.get(key) });
+			await this.deps.scratchPad.delete(this.scratchPadDraft(scope), decodeURIComponent(rawId), scope.kind === "project" ? scope.projectId : undefined);
+			sendJson(response, 200, { ok: true });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "delete failed";
+			sendError(response, message === "project not found" ? 404 : 400, "webError.invalidRequest", message);
+		}
 		return true;
 	}
 
@@ -522,26 +1144,32 @@ export class WebWorkspaceRoutes {
 		return true;
 	}
 
-	/** 读 POST JSON body（开关类请求很小；上限 64KB 防滥用）。 */
-	private readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
-		return new Promise((resolve, reject) => {
+	/** 读 POST JSON body（默认 64KB 上限；文件/草稿写入口显式放宽）。 */
+	private readJsonBody(request: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
+		// 超限/非法 JSON 抛出与 WebHttpResponders.readJson 同款哨兵错误（上层统一映射 413/400），
+		// 不再把客户端错误降级成 500；超限后继续排空连接以便 413 能送达。
+		return new Promise((resolvePromise, reject) => {
 			const chunks: Buffer[] = [];
 			let total = 0;
+			let oversized = false;
 			request.on("data", (chunk: Buffer) => {
 				total += chunk.length;
-				if (total > 64 * 1024) {
-					request.destroy();
-					reject(new Error("body too large"));
+				if (total > maxBytes) {
+					oversized = true;
 					return;
 				}
 				chunks.push(chunk);
 			});
 			request.on("end", () => {
+				if (oversized) {
+					reject(new WebBodyTooLargeError());
+					return;
+				}
 				try {
 					const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-					resolve(typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {});
-				} catch (error) {
-					reject(error instanceof Error ? error : new Error("invalid json"));
+					resolvePromise(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {});
+				} catch {
+					reject(new WebInvalidJsonError());
 				}
 			});
 			request.on("error", reject);

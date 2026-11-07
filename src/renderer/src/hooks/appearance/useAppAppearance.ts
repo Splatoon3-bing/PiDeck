@@ -4,7 +4,11 @@ import { msUntilNextThemeBoundary, resolveAppColorScheme } from "../../../../sha
 import { ensureI18nLocale, isI18nLocaleLoaded, resolveLocale, setI18nLocale } from "../../i18n";
 import type { AppSettings } from "../../../../shared/types";
 import { applyAppearanceWithTransition } from "./appearanceTransition";
+import { applyFontSizeAttributes } from "./fontSizeAttributes";
 import { isVideoWallpaperActive } from "./videoWallpaper";
+
+// 设置弹窗与 Web 端设置面板直接从这里取（同一份回落链，见 fontSizeAttributes.ts）
+export { applyFontSizeAttributes } from "./fontSizeAttributes";
 
 // 壁纸模式已注入的 token 键（effect 重跑/清除设置时需要跨运行保留，避免漏清）
 let injectedWallpaperTokens = new Set<string>();
@@ -91,21 +95,6 @@ export function applyCustomThemeTokens(root: HTMLElement, settings: CustomThemeS
 	applyFontFamilyTokens(root, settings, isDark);
 	// 壁纸开启时壁纸 token 必须压在自定义色之上（与 useAppAppearance 中「先自定义、后壁纸」的顺序一致）
 	for (const [k, v] of injectedWallpaperValues) root.style.setProperty(k, v);
-}
-
-/**
- * 字号档位 dataset 写入：ui/tab/chat/input 四区域 + 旧 fontSize 属性。
- * 回落链：ui ← uiFontSize ?? fontSize；tab ← tabBarFontSize ?? ui（Tab 跟界面不跟全局）；
- * chat/input ← 各自字段 ?? fontSize。设置弹窗实时预览与持久化应用共用本函数，防两处漂移。
- */
-export function applyFontSizeAttributes(root: HTMLElement, settings: AppSettings): void {
-	const uiFontSize = settings.uiFontSize ?? settings.fontSize;
-	root.dataset.uiFontSize = uiFontSize;
-	root.dataset.tabFontSize = settings.tabBarFontSize ?? uiFontSize;
-	root.dataset.chatFontSize = settings.chatFontSize ?? settings.fontSize;
-	root.dataset.inputFontSize = settings.inputFontSize ?? settings.fontSize;
-	// 旧属性保留，兼容外部依赖或测试仍读取 dataset.fontSize 的场景
-	root.dataset.fontSize = settings.fontSize;
 }
 
 /**

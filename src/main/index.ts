@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, safeStorage, screen, session, shell, Tray, Notification, webContents } from "electron";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { renderDshSessionHtml as renderSessionHtmlForExport, sanitizeExportFileName } from "./dsh/dshSessionHtmlExport";
 import { release as osRelease } from "node:os";
 import { createWriteStream, existsSync } from "node:fs";
@@ -497,6 +497,7 @@ import { registerRemoteGitReadIpc } from "./ipc/remoteGitReadIpc";
 import { registerStoreIpc } from "./ipc/storeIpc";
 import { registerTerminalIpc } from "./ipc/terminalIpc";
 import { registerScratchPadIpc } from "./ipc/scratchPadIpc";
+import { ScratchPadService } from "./scratchPad/ScratchPadService";
 import { registerPasteFilesIpc } from "./ipc/pasteFilesIpc";
 import { registerSecurityIpc } from "./ipc/securityIpc";
 import { registerVisionIpc } from "./ipc/visionIpc";
@@ -555,7 +556,7 @@ import { FloatingController } from "./floating/FloatingController";
 import { MiniOverlayWindow } from "./floating/MiniOverlayWindow";
 import { BROWSER_PANEL_PARTITION as BROWSER_PANEL_PARTITION_SHARED, isAllowedBrowserPanelUrl as isAllowedBrowserPanelUrlShared } from "./browser/browserSecurity";
 import { WebServiceManager } from "./web/WebServiceManager";
-import { WebWorkspaceRoutes } from "./web/WebWorkspaceRoutes";
+import { registerWebRoutes } from "./web/registerWebRoutes";
 import { preparePreloadPath } from "./preloadPath";
 import { AppLogger } from "./logging/AppLogger";
 import { setAppLogger } from "./logging/sharedLogger";
@@ -735,6 +736,8 @@ let worktreeService: WorktreeService;
 let gitService: GitService;
 /** refs 变化监听：面板订阅 push/commit/fetch，主进程推送后角标秒级跟平（轮询仍作兜底） */
 let gitRefsWatcher: GitRefsWatcher;
+/** 草稿本存储单实例：IPC 注册时创建，Web 工作区路由复用（只读装配，不重复迁移）。 */
+let scratchPadService!: ScratchPadService;
 let piLocator: PiLocator;
 let agentManager: AgentManager;
 /** 全局模型 capability snapshot；仅在启动/配置变更时临时拉起 Pi。 */
@@ -4090,7 +4093,13 @@ function registerIpc() {
 	});
 	registerResourceImportIpc(resourceImportManager);
 
-	registerScratchPadIpc({ appLogger });
+	// 草稿本存储单实例：桌面 IPC 与 Web 服务共用同一份边界/迁移逻辑（避免两套路径规则分叉）。
+	scratchPadService = new ScratchPadService({
+		draftsDir: join(app.getPath("userData"), "drafts"),
+		legacyDraftPath: join(app.getPath("userData"), "scratch-pad.md"),
+		logger: appLogger,
+	});
+	registerScratchPadIpc({ appLogger, service: scratchPadService });
 
 	// 通知历史落盘：showNotice 单点记录后推送主进程，重启可回灌（渲染层环形缓冲只服务当次会话）
 	const noticeHistoryStore = new NoticeHistoryStore({
@@ -6812,35 +6821,20 @@ app
 			},
 		});
 		// P1-P3 工作区路由（git/files/prompts）：只读能力注入，未装配的服务自动 503
-		webServiceManager.workspaceRoutes = new WebWorkspaceRoutes({
-			listProjects: () => projectStore.list(),
-			git: {
-				isGitRepo: (cwd) => gitService.isGitRepo(cwd),
-				getBranches: (cwd) => gitService.getBranches(cwd),
-				getStatus: (cwd) => gitService.getStatus(cwd),
-				getWorkspaceFileDiff: (cwd, group, filePath, maxBytes) => gitService.getWorkspaceFileDiff(cwd, group, filePath, maxBytes),
-				getCommitLog: (cwd, options) => gitService.getCommitLog(cwd, options),
-			},
-			files: {
-				listTree: (root, maxDepth, directory) => fileSystemService.listTree(root, maxDepth, directory),
-			},
-			// Web 端预览项目外文件时的用户意图门：与桌面端「项目外文件链接」同一套安全等级规则
-			// （denyDirs > 敏感文件 > 目录边界），ask 由 Web 端弹「只读查看」确认后再带 confirm=1 重请求。
-			userReadAccess: (input) => evaluateUserReadAccess(securityStore.getConfig(), input),
-			// 提示词库只在 SQLite 库可用时注入（缺库时路由返回 503，前端隐藏入口）
-			prompts: xuePromptManager
-				? {
-						list: (opts) => xuePromptManager.list(opts),
-						detail: (slug, category) => xuePromptManager.detail(slug, category),
-					}
-				: undefined,
-			// 技能/扩展资产面板（第二批）：与桌面设置页同源；列表脱敏在路由层做
-			assets: {
-				listSkills: () => skillManager.list(),
-				toggleSkill: (skillPath, enabled) => skillManager.toggle(skillPath, enabled),
-				listExtensions: () => extensionManager.list(),
-				setExtensionEnabled: (source, enabled, scope, path, projectId) => extensionManager.toggleFromUi(source, enabled, scope, path, projectId),
-			},
+		// Web 路由装配（工作区 + 设置）：装配细节在 web/registerWebRoutes.ts，主文件只留一行。
+		registerWebRoutes({
+			target: webServiceManager,
+			projects: projectStore,
+			git: gitService,
+			files: fileSystemService,
+			// 草稿本单例在本函数更晚的启动阶段赋值：传 provider，装配时不要固化 undefined。
+			scratchPad: () => scratchPadService,
+			security: securityStore,
+			prompts: xuePromptManager,
+			skills: skillManager,
+			extensions: extensionManager,
+			settings: settingsStore,
+			onThemeApplied: applyNativeThemeSource,
 		});
 		// C12：退出清理登记（before-quit 统一 runAll）
 		quitCleanup.register("theme-schedule", () => clearThemeScheduleTimer());

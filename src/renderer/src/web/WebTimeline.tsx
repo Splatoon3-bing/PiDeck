@@ -318,10 +318,12 @@ function ToolValueBlock(props: { label: string; text: string; tone?: "error" }) 
  * - 操作行（复制/分享）只挂回合尾，中间回复不再各自携带；
  * - 流式中过程组自动展开（实时看过程），结束回落折叠（历史紧凑），手动开合优先。
  */
-export const WebAssistantTurn = memo(function WebAssistantTurn(props: { turn: AssistantTurn; isStreaming: boolean; onOpenFile?: (path: string, line?: number) => void }) {
+export const WebAssistantTurn = memo(function WebAssistantTurn(props: { turn: AssistantTurn; isStreaming: boolean; autoExpandProcess?: boolean; onOpenFile?: (path: string, line?: number) => void }) {
 	const { turn } = props;
 	const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-	const processOpen = manualOpen ?? props.isStreaming;
+	// 流式期间是否自动展开过程组：设置项 expandInterimDuringStream 的 Web 端消费点。
+	// 手动开合状态永远优先（用户点过就不再跟着流式状态跑）。
+	const processOpen = manualOpen ?? (props.isStreaming && props.autoExpandProcess !== false);
 	const hasProcess = turn.segments.length > 0;
 	// 流式中的末段正文挂折叠容器外常显（打字机，桌面 liveInterimId 同款）：它仍在 segments
 	// 里参与计数，但容器内不再重复渲染；收尾后重分组提升为 finalText，此处自然消失。
@@ -678,6 +680,8 @@ export function WebTimeline(props: {
 	jumpToLatestNonce?: number;
 	/** 命令式跳转句柄（虚拟化后离屏行无 DOM，getElementById 会静默失效）。 */
 	jumpApiRef?: MutableRefObject<WebTimelineJumpApi | null>;
+	/** 流式期间自动展开过程组（设置项 expandInterimDuringStream；缺省按开启）。 */
+	autoExpandProcess?: boolean;
 }) {
 	const { messages, hasActiveSession, hasMoreHistory, moreCount, loadingMore, streaming, error, onLoadMore } = props;
 	const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -895,7 +899,7 @@ export function WebTimeline(props: {
 													.map((messageId) => (
 														<span key={messageId} id={`web-msg-${messageId}`} className="sr-only" />
 													))}
-												<WebAssistantTurn turn={entry.turn} isStreaming={streaming && entry.id === lastEntryId} onOpenFile={props.onOpenFile} />
+												<WebAssistantTurn turn={entry.turn} isStreaming={streaming && entry.id === lastEntryId} autoExpandProcess={props.autoExpandProcess} onOpenFile={props.onOpenFile} />
 											</>
 										)}
 									</div>

@@ -12,29 +12,32 @@
  * UI 层与桌面端对齐：WebSidebar / WebHeader / WebTimeline / WebComposer，
  * 复用桌面设计 token、shadcn 组件、lucide 图标与 timeline/surfaces 样式类。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
-import type { AgentBackend, AvailableModel, SessionRuntimeTarget } from "../../../shared/types";
+import type { AgentBackend, AvailableModel, SafeWebSettings, SessionRuntimeTarget, WebWritableSettings } from "../../../shared/types";
 import { createSessionModelPreference } from "../../../shared/modelDisplayName";
 import { t } from "@/i18n";
 import { WebSidebar, type WebSessionRowAction } from "./WebSidebar";
+import { WebSessionTabs } from "./WebSessionTabs";
+import { closeWebTab, parseStoredWebTabs, shouldShowWebTabs, WEB_TABS_STORAGE_KEY } from "./webSessionTabs";
 import { WebHeader, type WebHeaderStatus } from "./WebHeader";
 import { WebTimeline, uiMessageImages, uiMessageText, type WebTimelineJumpApi } from "./WebTimeline";
 import { forkPromptText, isLastUserMessageIn, resolveWebForkEntryId } from "./webForkMutation";
 import { WebComposer } from "./WebComposer";
+import { WebComposerBanner, WebAuthExpiredBanner } from "./WebComposerBanner";
 import { WebDshToolsPanel } from "./WebDshToolsPanel";
 import { WebBranchBar } from "./WebBranchBar";
-import { sessionFromPath, sessionPath } from "./webSessionRoute";
-import { WebWorkspaceDrawer } from "./WebWorkspaceDrawer";
+import { useWebSessionRoute, useWebTabSync } from "./useWebSessionNavigation";
+import { WebWorkspaceDrawer, useWorkspacePanel } from "./WebWorkspaceDrawer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui-shadcn/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui-shadcn/dialog";
 import { Button } from "@/components/ui-shadcn/button";
 import { Input } from "@/components/ui-shadcn/input";
 import { webChatFetch } from "./webChatFetch";
-import { chatMessagesToUiMessages, createProject, createSession, deleteProject, fetchMessagePage, fetchModels, fetchState, getWebAuthHeaders, respondToUi, setRuntimeModel, setRuntimeThinking, updateSessionRecord } from "./webApi";
+import { chatMessagesToUiMessages, createProject, createSession, deleteProject, fetchMessagePage, fetchModels, fetchState, fetchWebSettings, getWebAuthHeaders, respondToUi, setRuntimeModel, setRuntimeThinking, updateSessionRecord, updateWebSettings } from "./webApi";
 import { abortRuntime, cloneRuntime, compactRuntime, copySession, deleteSession, downloadSessionHtml, editRuntimeMessage, deleteRuntimeMessage, prepareResend, renameSession, restartRuntime, activateRuntime, forkRuntimeSession, getForkMessages } from "./webApi";
 import { fetchRuntimeContextUsage, setRuntimePermission, setSessionSecurityLevel } from "./webApi";
 import { dataUrlToFilePart } from "./webMessageParts";
@@ -49,7 +52,12 @@ const MAX_SEARCH_JUMP_PAGES = 5;
 import { WebFilePreview, type WebFilePreviewTarget } from "./WebFilePreview";
 import { WebSearchDialog } from "./WebSearchDialog";
 import { WebSkillsExtensionsDialog } from "./WebSkillsExtensionsDialog";
-import { applyWebTheme, nextWebTheme, readStoredWebTheme, resolveWebTheme, storeWebTheme, systemPrefersDark, toggleWebTheme, type ResolvedWebTheme, type WebThemePreference } from "./webTheme";
+import { applyWebTheme, msUntilWebThemeChange, nextWebTheme, readStoredWebTheme, resolveWebTheme, storeWebTheme, systemPrefersDark, toggleWebTheme, type ResolvedWebTheme, type WebThemePreference } from "./webTheme";
+import { useWebSettings } from "./useWebSettings";
+import { WebSettingsDialog } from "./WebSettingsPanel";
+import { useWebCommands } from "./webCommandList";
+import { WebCommandPalette } from "./WebCommandPalette";
+import { applyFontSizeAttributes } from "../hooks/appearance/fontSizeAttributes";
 import { registerWebServiceWorker, usePwaInstall } from "./webPwa";
 import { decideStreamRecovery } from "./webStreamRecovery";
 import { useWebHeaderAutoHide } from "./useWebHeaderAutoHide";
@@ -84,6 +92,8 @@ export function WebChatApp() {
 		runtimes: [],
 	});
 	const [activeSessionId, setActiveSessionId] = useState<string>("");
+	// 多标签工作台：只持久化标签 id 顺序，会话内容仍按需从服务端拉。
+	const [openTabIds, setOpenTabIds] = useState<string[]>(() => (typeof window !== "undefined" ? parseStoredWebTabs(window.localStorage.getItem(WEB_TABS_STORAGE_KEY)) : []));
 	const [creatingProjectId, setCreatingProjectId] = useState<string>("");
 	const [connected, setConnected] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
@@ -123,6 +133,10 @@ export function WebChatApp() {
 	const [dshToolsOpen, setDshToolsOpen] = useState(false);
 	// P1：workspace 抽屉 / 重命名 / 删除确认
 	const [workspaceOpen, setWorkspaceOpen] = useState(false);
+	// 抽屉面板与命令面板入口：状态由组合根持有（命令面板要能「打开 Git 面板」）。
+	const [workspacePanel, selectWorkspacePanel] = useWorkspacePanel();
+	// 命令面板（Ctrl/Cmd+Shift+P）
+	const [commandOpen, setCommandOpen] = useState(false);
 	// 前端 bundle 自更新：基线 = 本页加载时的构建指纹；指纹一变只亮「更新」按钮，不一自动重载。
 	const loadedBuildIdRef = useRef<string | null>(null);
 	const [buildUpdateAvailable, setBuildUpdateAvailable] = useState(false);
@@ -182,9 +196,9 @@ export function WebChatApp() {
 	const streaming = status === "submitted" || status === "streaming";
 
 	// ── 第二批：主题 / PWA / 搜索 / SSE 断线恢复 ──
-	const [themePreference, setThemePreference] = useState<WebThemePreference>(() => readStoredWebTheme());
-	const [systemDark, setSystemDark] = useState(() => systemPrefersDark());
-	const resolvedTheme: ResolvedWebTheme = resolveWebTheme(themePreference, systemDark);
+	// 主机设置（明暗/字号/输入行为）与主题副作用收在 useWebSettings：组合根只有一份投影。
+	const webSettings = useWebSettings();
+	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [assetsOpen, setAssetsOpen] = useState(false);
 	const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
@@ -203,68 +217,18 @@ export function WebChatApp() {
 	// 恢复判定用它区分「真正空闲」与「脱节待追赶」（render 期赋值，在 activeRuntime 计算之后）。
 	const activeRuntimeRef = useRef<WebRuntime | undefined>(undefined);
 	const { canInstall, install } = usePwaInstall();
-
-	// 主题：应用为与桌面同源的 data-theme 机制；跟随系统变化时重解析
-	useEffect(() => {
-		applyWebTheme(resolvedTheme);
-	}, [resolvedTheme]);
-	useEffect(() => {
-		const media = window.matchMedia("(prefers-color-scheme: dark)");
-		const onChange = (event: MediaQueryListEvent) => setSystemDark(event.matches);
-		media.addEventListener("change", onChange);
-		return () => media.removeEventListener("change", onChange);
-	}, []);
-	const cycleTheme = () => {
-		// system → 跳到与当前解析结果相反的一档：系统此时是亮色却切到 light，用户看不到任何变化。
-		const next: WebThemePreference = nextWebTheme(themePreference, resolvedTheme);
-		setThemePreference(next);
-		storeWebTheme(next);
-	};
-	const toggleTheme = () => {
-		const next: WebThemePreference = toggleWebTheme(themePreference, resolvedTheme);
-		setThemePreference(next);
-		storeWebTheme(next);
-	};
+	const { resolvedTheme, themePreference, cycleTheme, toggleTheme } = webSettings;
 
 	// PWA：SW 注册一次（失败静默降级，不影响页面功能）
 	useEffect(() => {
 		registerWebServiceWorker();
 	}, []);
 
-	// ── 会话路由（URL ↔ activeSessionId）──
-	// 刷新/分享/回退能回到同一会话；首次恢复前不回写 URL，避免落地页加载瞬间把 /s/<id> 冲掉。
+	// ── 会话路由（URL ↔ activeSessionId）与标签同步 ──
+	// 刷新/分享/回退能回到同一会话；副作用收在 useWebSessionNavigation，组合根只持有 ref 与状态。
 	const routeRestoredRef = useRef(false);
-	useEffect(() => {
-		if (routeRestoredRef.current) return;
-		const id = sessionFromPath(window.location.pathname);
-		if (!id) {
-			routeRestoredRef.current = true;
-			return;
-		}
-		// 列表未拉到（空且未确认连通）时等待下一轮；确认后无此会话 → 死链，回根路径
-		if (state.sessions.some((session) => session.id === id)) {
-			setActiveSessionId(id);
-			routeRestoredRef.current = true;
-		} else if (state.sessions.length > 0 || connected) {
-			window.history.replaceState(null, "", "/");
-			routeRestoredRef.current = true;
-		}
-	}, [state.sessions, connected]);
-	// 选中变化 → pushState（popstate 驱动的变化路径已一致，自然短路不回写）
-	useEffect(() => {
-		if (!routeRestoredRef.current) return;
-		const desired = sessionPath(activeSessionId);
-		if (window.location.pathname === desired) return;
-		window.history.pushState(null, "", desired);
-	}, [activeSessionId]);
-	// 浏览器回退/前进：按 URL 恢复选中
-	useEffect(() => {
-		const onPopState = () => {
-			setActiveSessionId(sessionFromPath(window.location.pathname));
-		};
-		window.addEventListener("popstate", onPopState);
-		return () => window.removeEventListener("popstate", onPopState);
-	}, []);
+	useWebSessionRoute({ activeSessionId, sessions: state.sessions, connected, restoredRef: routeRestoredRef, setActiveSessionId });
+	useWebTabSync({ openTabIds, setOpenTabIds, activeSessionId, activeSessionIdRef, sessions: state.sessions });
 
 	// SSE 断线恢复：手机锁屏/切网/后台节流断流后，回前台/网络恢复/error 态时
 	// 从磁盘拉最新消息窗口覆盖本地（pi 侧不受影响，见 webStreamRecovery.ts）
@@ -451,7 +415,7 @@ export function WebChatApp() {
 		setFilePreview({ kind: "file", projectId: project.id, projectRoot: project.root, path, line });
 	}, []);
 
-	const overlayOpen = mobileSidebarOpen || searchOpen || assetsOpen || dshToolsOpen || workspaceOpen || filePreview != null || renameDraft != null || deleteConfirmId != null;
+	const overlayOpen = mobileSidebarOpen || searchOpen || assetsOpen || dshToolsOpen || workspaceOpen || settingsOpen || commandOpen || filePreview != null || renameDraft != null || deleteConfirmId != null;
 	useEffect(() => {
 		overlayOpenRef.current = overlayOpen;
 		if (overlayOpen) revealHeader();
@@ -901,6 +865,8 @@ export function WebChatApp() {
 				delete historyMetaRef.current[session.id];
 				loadedSessionsRef.current.delete(session.id);
 			}
+			const deletedIds = new Set(deletedSessions.map((session) => session.id));
+			setOpenTabIds((current) => current.filter((id) => !deletedIds.has(id)));
 			setState((current) => ({
 				...current,
 				projects: current.projects.filter((project) => project.id !== projectId),
@@ -1164,6 +1130,8 @@ export function WebChatApp() {
 			delete messagesBySessionRef.current[sessionId];
 			delete historyMetaRef.current[sessionId];
 			loadedSessionsRef.current.delete(sessionId);
+			// 删除的会话不应留在标签栏里（否则点击会落到已不存在的会话）。
+			setOpenTabIds((current) => current.filter((id) => id !== sessionId));
 			if (activeSessionIdRef.current === sessionId) setActiveSessionId("");
 			await refreshNow();
 		} catch (error) {
@@ -1430,6 +1398,36 @@ export function WebChatApp() {
 	const composerTurnBusy = combinedStreaming || activeRuntime?.status === "running" || activeRuntime?.status === "starting";
 	const composerHidden = resolveComposerHidden({ headerHidden, nearBottom, streaming: combinedStreaming, engaged: composerEngaged });
 
+	/** 关闭标签：右邻优先，其次左邻；关的是当前会话时才切走。 */
+	const handleCloseTab = (sessionId: string) => {
+		const result = closeWebTab(openTabIds, sessionId, activeSessionIdRef.current);
+		if (result.ids.length !== openTabIds.length) setOpenTabIds(result.ids);
+		if (result.nextActiveId !== activeSessionIdRef.current) setActiveSessionId(result.nextActiveId);
+	};
+
+	// 命令面板清单：装配在 webCommandList.ts，这里只把当前会话/回调接上。
+	// 快捷键（Ctrl/Cmd+Shift+P）由 WebCommandPalette 自己挂，组合根不持有键盘逻辑。
+	const commands = useWebCommands({
+		activeSessionId,
+		activeProjectId: activeSession?.projectId ?? state.projects[0]?.id,
+		hasActiveSession: Boolean(activeSession),
+		sessions: state.sessions,
+		canInstall,
+		onNewSession: (projectId) => void handleCreateSession(projectId),
+		onCloseTab: handleCloseTab,
+		onSelectSession: setActiveSessionId,
+		onOpenPanel: (panel) => {
+			selectWorkspacePanel(panel);
+			setWorkspaceOpen(true);
+		},
+		onCloseWorkspace: () => setWorkspaceOpen(false),
+		onOpenSettings: () => setSettingsOpen(true),
+		onToggleTheme: toggleTheme,
+		onOpenSearch: () => setSearchOpen(true),
+		onRefreshModels: () => void refreshModels(),
+		onInstall: () => void install(),
+	});
+
 	return (
 		<div className="app web-app wechat-shell flex h-[100dvh] w-full min-w-0 overflow-hidden bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-foreground [[data-bg-image=on]_&]:bg-transparent" data-header-hidden={headerHidden ? "on" : undefined}>
 			<WebSidebar
@@ -1494,20 +1492,29 @@ export function WebChatApp() {
 					canInstall={canInstall}
 					onInstall={() => void install()}
 					onOpenAssets={() => setAssetsOpen(true)}
+					onOpenSettings={() => setSettingsOpen(true)}
+					onOpenCommands={() => setCommandOpen(true)}
 				/>
+				{shouldShowWebTabs(openTabIds) ? (
+					<WebSessionTabs
+						sessions={state.sessions}
+						tabIds={openTabIds}
+						activeSessionId={activeSessionId}
+						runtimeFor={runtimeFor}
+						acpTools={state.acpTools}
+						onSelect={(sessionId) => {
+							setActiveSessionId(sessionId);
+							setMobileSidebarOpen(false);
+						}}
+						onClose={handleCloseTab}
+					/>
+				) : null}
 				{/* P3：fork 家族分支导航（家族只有一条会话时自渲染为 null） */}
 				<WebBranchBar sessions={state.sessions} activeSessionId={activeSessionId} onSelect={(sessionId) => setActiveSessionId(sessionId)} />
 				{/* 第二批：断线恢复提示（几秒后自动消失） */}
 				{recoveryNotice ? <div className="border-b border-border bg-primary/10 px-3 py-1 text-center text-xs text-primary">{recoveryNotice}</div> : null}
 				{/* 令牌失效提示：不会自愈，需用户从桌面端重新分享；重试仅覆盖「服务端已恢复同 token」的场景 */}
-				{authExpired ? (
-					<div className="flex items-center justify-center gap-2 border-b border-border bg-destructive/10 px-3 py-1.5 text-center text-xs text-destructive">
-						<span>{t("web.authExpired")}</span>
-						<Button variant="outline" size="sm" className="h-6 px-2 text-micro" onClick={() => window.location.reload()}>
-							{t("web.authExpiredRetry")}
-						</Button>
-					</div>
-				) : null}
+				{authExpired ? <WebAuthExpiredBanner /> : null}
 				{/* 编辑/重发/删除走 fork 化写入：pi 恒可，DSH 需要活跃 runtime（历史会话没有运行时命令），
 					ACP 一律不给——投影/归档由 agent CLI 主导，运行时没有 fork 命令，摆出入口只会报错。 */}
 				<WebTimeline
@@ -1538,33 +1545,20 @@ export function WebChatApp() {
 					onResendMessage={(messageId) => void handleResendMessage(messageId)}
 					onOpenFile={openFilePreview}
 					jumpApiRef={timelineJumpRef}
+					autoExpandProcess={webSettings.settings?.expandInterimDuringStream ?? true}
 				/>
 				<WebSessionStrips sessionId={activeSessionId} />
 				{/* 2026-10 评审 P1：错误/待答原本只出现在时间线列表尾，用户回读历史时完全不可见
 				    （composer 又可能已隐藏）。在 composer 上方放常驻横幅兜底，滚多远都在视口内。 */}
 				{(activeError && errorDismissed !== activeError) || (activePendingUi && !nearBottom) ? (
-					<div className="composer-above flex shrink-0 flex-col gap-1 border-t border-border/60 bg-background px-3 py-1.5">
-						{activeError && errorDismissed !== activeError ? (
-							<div className="flex items-center gap-1.5 rounded-md border border-danger/30 bg-danger/10 px-2.5 py-1 text-caption text-danger" role="alert">
-								<span className="min-w-0 flex-1 leading-5">{activeError}</span>
-								{/* 传输层错误有现成的兜底恢复路径（从磁盘重拉当前会话）；命令错误无通用重试，只给关闭 */}
-								{transportError ? (
-									<Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-caption text-danger hover:bg-danger/10 hover:text-danger" onClick={() => activeSessionId && refreshSessionMessages(activeSessionId)}>
-										{t("web.refreshMessages")}
-									</Button>
-								) : null}
-								<button type="button" className="flex size-7 shrink-0 items-center justify-center rounded text-danger transition-colors hover:bg-danger/10" aria-label={t("common.close")} onClick={() => setErrorDismissed(activeError)}>
-									<X className="size-3.5" aria-hidden="true" />
-								</button>
-							</div>
-						) : null}
-						{activePendingUi && !nearBottom ? (
-							<button type="button" className="flex w-full items-center gap-2 rounded-md border border-border bg-primary/10 px-2.5 py-1.5 text-caption text-primary transition-colors hover:bg-primary/15" role="status" onClick={() => setJumpToLatestNonce((nonce) => nonce + 1)}>
-								<span className="min-w-0 flex-1 truncate text-left">{t("web.askWaitingBanner")}</span>
-								<span className="shrink-0 font-medium">{t("web.scrollToBottom")}</span>
-							</button>
-						) : null}
-					</div>
+					<WebComposerBanner
+						error={activeError && errorDismissed !== activeError ? activeError : null}
+						// 传输层错误有现成的兜底恢复路径（从磁盘重拉当前会话）；命令错误无通用重试，只给关闭
+						onRetryMessages={transportError ? () => activeSessionId && void refreshSessionMessages(activeSessionId) : undefined}
+						onDismissError={() => setErrorDismissed(activeError)}
+						pendingHidden={Boolean(activePendingUi) && !nearBottom}
+						onJumpToLatest={() => setJumpToLatestNonce((nonce) => nonce + 1)}
+					/>
 				) : null}
 				<WebComposer
 					hasSession={Boolean(activeSessionId)}
@@ -1595,14 +1589,17 @@ export function WebChatApp() {
 					onRemoveQueued={handleRemoveQueued}
 					queuePaused={queuePaused}
 					onResumeQueue={() => setQueuePausedBoth(false)}
+					sendShortcut={webSettings.settings?.sendShortcut ?? "enter-send"}
 				/>
 			</main>
 			{/* 桌面工作区与会话并排，移动端仍是覆盖式抽屉。 */}
-			{workspaceOpen && activeSession ? <WebWorkspaceDrawer projectId={activeSession.projectId} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} onOpenFile={openFilePreview} /> : null}
+			{workspaceOpen && activeSession ? <WebWorkspaceDrawer projectId={activeSession.projectId} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} onOpenFile={openFilePreview} panel={workspacePanel} onSelectPanel={selectWorkspacePanel} /> : null}
 			{/* S6.3：DSH 工具面板（仅 dsh 会话头部按钮触发） */}
 			{/* 第二批：会话内搜索（Ctrl+K）与技能/扩展面板 */}
 			<WebSearchDialog open={searchOpen} onOpenChange={setSearchOpen} sessionId={activeSessionId} messages={messages} onJump={jumpToSearchHit} />
 			<WebSkillsExtensionsDialog open={assetsOpen} onOpenChange={setAssetsOpen} />
+			<WebCommandPalette open={commandOpen} onOpenChange={setCommandOpen} commands={commands} />
+			<WebSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} controller={webSettings} />
 			{dshToolsOpen && activeSessionId && <WebDshToolsPanel sessionId={activeSessionId} onClose={() => setDshToolsOpen(false)} />}
 			{/* 第三批：文件/diff 全屏预览（消息文件链接 + 文件变更 strip chip） */}
 			{filePreview ? <WebFilePreview target={filePreview} onClose={() => setFilePreview(null)} /> : null}

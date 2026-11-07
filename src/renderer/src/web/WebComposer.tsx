@@ -20,7 +20,7 @@ import { Button } from "@/components/ui-shadcn/button";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { AgentBackend, AvailableModel, ComposerAgentMode, SessionModelPreference } from "../../../shared/types";
-import { buildComposerPromptSubmission } from "../composerBehavior";
+import { buildComposerPromptSubmission, getComposerEnterIntent, type SendShortcut } from "../composerBehavior";
 import { compressImageToDataUrl, imagesFromPasteEvent } from "./webImageCompress";
 import { WebModelSelector } from "./WebModelSheet";
 import { WebBackendSelector } from "./WebBackendSelector";
@@ -74,7 +74,8 @@ export function WebComposer(props: {
 	queuePaused?: boolean;
 	/** 暂停态下恢复自动投递（等同于用户主动发送，但不必先打一条消息）。 */
 	onResumeQueue?: () => void;
-	/** 父级驱动的预填充（重发 / 提示词插入）；nonce 变化才生效，避免重复触发。 */
+	/** 发送快捷键（/api/settings 投影）：与桌面 getComposerEnterIntent 同一判定，触屏始终 Enter 换行。 */
+	sendShortcut?: SendShortcut;
 	prefill?: { text: string; nonce: number };
 	onFocusChange?: (focused: boolean) => void;
 	onEngagedChange?: (engaged: boolean) => void;
@@ -302,12 +303,12 @@ export function WebComposer(props: {
 							disabled={props.disabled}
 							/* 触屏虚拟键盘没有 Shift：Enter 一律保持默认换行，发送只走右下角按钮，
 							    避免「发送」与「换行」共用一键造成误发（2026-10 评审 P1）；
-							    桌面物理键盘维持 Enter 发送 / Shift+Enter 换行。enterKeyHint 让
-							    虚拟键盘回车键直接标注行为（enter=换行 / send=发送）。 */
-							enterKeyHint={coarsePointer ? "enter" : "send"}
+							    桌面物理键盘按发送快捷键设置判定（与桌面端 getComposerEnterIntent 同源）。
+							    enterKeyHint 让虚拟键盘回车键直接标注行为（enter=换行 / send=发送）。 */
+							enterKeyHint={coarsePointer || (props.sendShortcut ?? "enter-send") !== "enter-send" ? "enter" : "send"}
 							onKeyDown={(event) => {
 								if (coarsePointer) return;
-								if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+								if (getComposerEnterIntent(event.nativeEvent, props.sendShortcut ?? "enter-send") === "send") {
 									event.preventDefault();
 									submit();
 								}

@@ -1,29 +1,60 @@
 /**
- * WebWorkspaceDrawer — Web 端工作区抽屉（P3）：Git / 文件 两个只读面板。
+ * WebWorkspaceDrawer — Web 端工作区抽屉（文件 / Git / 草稿本）。
  *
- * 与桌面右侧抽屉同定位但收窄为只读：
- * - Git：分支 + 变更分组（merge/index/workingTree/untracked）+ 文件 diff（上下两栏
- *   original/modified）+ 最近提交。写入类操作（commit/stage）仍回桌面完成。
- * - 文件：项目内目录浏览（面包屑导航）+ 有界文本预览（512KB / 二进制拦截，
- *   边界在后端 WebWorkspaceRoutes 强制）；点击文件交给全屏预览（WebFilePreview），抽屉只负责导航。
- * - 桌面是与会话并排的右栏，不再用遮罩盖住整个页面；手机保留覆盖式抽屉。
+ * 结构对齐桌面「右侧抽屉 + 活动栏」：桌面是与会话并排的一栏，手机是覆盖式面板。
+ * 面板实现各自拆分（WebFilesPanel / WebGitPanel / WebNotesPanel），本文件只负责
+ * 外壳、面板切换与关闭语义，避免再长成第二个 600 行巨文件。
  */
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, FileText, Folder, GitBranch, Loader2, X } from "lucide-react";
-import type { CommitEntry, GitBranchInfo, GitResourceGroups } from "../../../shared/types";
+import { FolderOpen, GitBranch, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui-shadcn/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui-shadcn/tabs";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { fetchFileList, fetchGitDiff, fetchGitLog, fetchGitStatus } from "./webApi";
 import { useDismissOnBack } from "./useDismissOnBack";
 import { useIsMobileViewport } from "./useIsMobileViewport";
-import type { WebFileNodeLite } from "./webTypes";
+import { WebFilesPanel } from "./WebFilesPanel";
+import { WebGitPanel } from "./WebGitPanel";
+import { WebNotesPanel } from "./WebNotesPanel";
 
-export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; onClose: () => void; onOpenFile: (path: string) => void }) {
+export type WebWorkspacePanel = "files" | "git" | "notes";
+
+const PANEL_STORAGE_KEY = "pideck-web-workspace-panel";
+const PANEL_ORDER: WebWorkspacePanel[] = ["files", "git", "notes"];
+
+/** 读取上次使用的面板（组合根与抽屉共用；命令面板「打开 Git 面板」也走同一存储）。 */
+export function readStoredWorkspacePanel(): WebWorkspacePanel {
+	if (typeof window === "undefined") return "files";
+	const stored = window.localStorage.getItem(PANEL_STORAGE_KEY);
+	return stored === "files" || stored === "git" || stored === "notes" ? stored : "files";
+}
+
+/** 记住当前面板：刷新/重开后停在同一页。 */
+export function storeWorkspacePanel(panel: WebWorkspacePanel): void {
+	if (typeof window === "undefined") return;
+	try {
+		window.localStorage.setItem(PANEL_STORAGE_KEY, panel);
+	} catch {
+		// 隐私模式/存储禁用：仅本次会话生效
+	}
+}
+
+function panelLabel(panel: WebWorkspacePanel): string {
+	if (panel === "git") return t("web.panelGit");
+	if (panel === "notes") return t("web.panelNotes");
+	return t("web.panelFiles");
+}
+
+function panelIcon(panel: WebWorkspacePanel) {
+	if (panel === "git") return GitBranch;
+	if (panel === "notes") return Pencil;
+	return FolderOpen;
+}
+
+export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; onClose: () => void; onOpenFile: (path: string) => void; panel: WebWorkspacePanel; onSelectPanel: (panel: WebWorkspacePanel) => void }) {
 	const mobile = useIsMobileViewport();
-	// 系统返回键/手势关闭（手机上抽屉是全屏覆盖层，与预览同一关闭语义）
+	const panel = props.panel;
 	useDismissOnBack(props.onClose, props.open && mobile);
+
 	useEffect(() => {
 		if (!props.open || mobile) return;
 		const closeOnEscape = (event: KeyboardEvent) => {
@@ -33,281 +64,107 @@ export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; on
 		return () => document.removeEventListener("keydown", closeOnEscape);
 	}, [mobile, props.open, props.onClose]);
 
+	const selectPanel = (next: WebWorkspacePanel) => {
+		props.onSelectPanel(next);
+	};
+
+	const header = (
+		<div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2.5">
+			<span className="min-w-0 flex-1 truncate text-control font-medium text-foreground">{t("web.workspaceDrawer")}</span>
+			<span className="shrink-0 text-micro text-muted-foreground">{panelLabel(panel)}</span>
+			<Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground" onClick={props.onClose} aria-label={t("common.close")} title={t("common.close")}>
+				<X className="size-4" aria-hidden="true" />
+			</Button>
+		</div>
+	);
+
+	// 手机：顶部分段切换（触控目标 32px+），内容占满剩余高度；桌面：左侧活动栏 + 内容。
+	const panelNav = mobile ? (
+		<div className="grid shrink-0 grid-cols-3 gap-1 border-b border-border p-1.5" role="tablist" aria-label={t("web.workspaceDrawer")}>
+			{PANEL_ORDER.map((entry) => {
+				const Icon = panelIcon(entry);
+				const active = entry === panel;
+				return (
+					<button key={entry} type="button" role="tab" aria-selected={active} className={cn("flex h-8 items-center justify-center gap-1 rounded-md text-caption transition-colors", active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground")} onClick={() => selectPanel(entry)}>
+						<Icon className="size-3.5" aria-hidden="true" />
+						{panelLabel(entry)}
+					</button>
+				);
+			})}
+		</div>
+	) : (
+		<div className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-border bg-muted/20 py-2" role="tablist" aria-label={t("web.workspaceDrawer")}>
+			{PANEL_ORDER.map((entry) => {
+				const Icon = panelIcon(entry);
+				const active = entry === panel;
+				return (
+					<button
+						key={entry}
+						type="button"
+						role="tab"
+						aria-selected={active}
+						aria-label={panelLabel(entry)}
+						title={panelLabel(entry)}
+						className={cn("relative flex size-8 items-center justify-center rounded-md transition-colors", active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground")}
+						onClick={() => selectPanel(entry)}
+					>
+						<Icon className="size-4" aria-hidden="true" />
+						{active ? <span className="absolute left-0 h-4 w-[2px] rounded-full bg-primary" aria-hidden="true" /> : null}
+					</button>
+				);
+			})}
+		</div>
+	);
+
+	const body =
+		panel === "git" ? (
+			/* scroll-ok: nested —— Git 面板内部是变更列表 + diff 滚动，本层只做面板级滚动窗。 */
+			<div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+				<WebGitPanel projectId={props.projectId} active={props.open} />
+			</div>
+		) : panel === "notes" ? (
+			<div className="flex min-h-0 flex-1 flex-col px-2.5 py-2">
+				<WebNotesPanel projectId={props.projectId} active={props.open} />
+			</div>
+		) : (
+			<div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+				<WebFilesPanel projectId={props.projectId} active={props.open} onOpenFile={props.onOpenFile} />
+			</div>
+		);
+
 	const content = (
 		<>
-			<div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-				<strong className="text-sm font-semibold">{t("web.workspaceDrawer")}</strong>
-				<Button type="button" variant="ghost" size="icon" className="size-9 pointer-coarse:size-11" onClick={props.onClose} aria-label={t("common.close")}>
-					<X className="size-5" aria-hidden="true" />
-				</Button>
-			</div>
-			<Tabs defaultValue="git" className="flex min-h-0 flex-1 flex-col gap-0">
-				<TabsList className="mx-3 mt-2 grid w-auto shrink-0 grid-cols-2">
-					<TabsTrigger value="git">{t("web.gitTab")}</TabsTrigger>
-					<TabsTrigger value="files">{t("web.filesTab")}</TabsTrigger>
-				</TabsList>
-				{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
-				<TabsContent value="git" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-					<GitPanel projectId={props.projectId} active={props.open} />
-				</TabsContent>
-				{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
-				<TabsContent value="files" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-					<FilesPanel projectId={props.projectId} active={props.open} onOpenFile={props.onOpenFile} />
-				</TabsContent>
-			</Tabs>
+			{header}
+			{panelNav}
+			{body}
 		</>
 	);
 
 	if (!mobile) {
 		return (
-			<aside className="h-full w-[clamp(20rem,32vw,28rem)] shrink-0 border-l border-border bg-background" aria-label={t("web.workspaceDrawer")}>
-				<div className="flex h-full min-h-0 flex-col">{content}</div>
+			<aside className="flex h-full w-[clamp(20rem,32vw,30rem)] shrink-0 flex-col overflow-hidden border-l border-border bg-background" aria-label={t("web.workspaceDrawer")} data-testid="web-workspace-drawer">
+				{content}
 			</aside>
 		);
 	}
 	return (
-		<div className="fixed inset-0 z-50">
-			<div className="absolute inset-0 bg-black/30" onClick={props.onClose} />
-			<aside className="absolute inset-y-0 right-0 flex w-[min(400px,100vw)] flex-col border-l border-border bg-background shadow-xl animate-in slide-in-from-right duration-200" aria-label={t("web.workspaceDrawer")}>
+		<div className="fixed inset-0 z-50 bg-background" data-testid="web-workspace-drawer">
+			<aside className="flex h-full flex-col overflow-hidden bg-background" aria-label={t("web.workspaceDrawer")}>
 				{content}
 			</aside>
 		</div>
 	);
 }
 
-// ── Git 面板 ───────────────────────────────────────────────────────────
-
-type DiffPayload = { originalContent: string; modifiedContent: string } | null;
-
 /**
- * 提交日期标签：CommitEntry.authorDate 已是毫秒（GitService 把 git 的秒级时间戳乘过 1000），
- * 直接 new Date(ms)；非有限值不出标签，避免渲染成 NaN/1970。
+ * 抽屉面板状态（组合根持有）：命令面板「打开 Git 面板」与活动栏点击写同一处，
+ * 面板选择再持久化到 localStorage，刷新/重开停在同一页。
  */
-function commitDateLabel(authorDate: number): string {
-	if (!Number.isFinite(authorDate) || authorDate <= 0) return "";
-	return new Date(authorDate).toLocaleDateString();
-}
-
-function GitPanel(props: { projectId: string; active: boolean }) {
-	const [loading, setLoading] = useState(false);
-	const [branch, setBranch] = useState<GitBranchInfo | null>(null);
-	const [groups, setGroups] = useState<GitResourceGroups | null>(null);
-	const [commits, setCommits] = useState<CommitEntry[]>([]);
-	const [noRepo, setNoRepo] = useState(false);
-	const [diffPath, setDiffPath] = useState<string | null>(null);
-	const [diffGroup, setDiffGroup] = useState<"merge" | "index" | "workingTree" | "untracked">("workingTree");
-	const [diff, setDiff] = useState<DiffPayload>(null);
-	const [diffLoading, setDiffLoading] = useState(false);
-
-	const load = useCallback(async () => {
-		setLoading(true);
-		setNoRepo(false);
-		try {
-			const status = await fetchGitStatus(props.projectId);
-			if (!status.repo) {
-				setNoRepo(true);
-				setBranch(null);
-				setGroups(null);
-				return;
-			}
-			setBranch(status.branch);
-			setGroups(status.groups);
-			setCommits(await fetchGitLog(props.projectId, 12));
-		} catch {
-			setNoRepo(true);
-		} finally {
-			setLoading(false);
-		}
-	}, [props.projectId]);
-
-	useEffect(() => {
-		if (props.active) void load();
-	}, [props.active, load]);
-
-	const openDiff = async (group: "merge" | "index" | "workingTree" | "untracked", path: string) => {
-		if (diffPath === path) {
-			setDiffPath(null);
-			return;
-		}
-		setDiffPath(path);
-		setDiffGroup(group);
-		setDiffLoading(true);
-		try {
-			setDiff(await fetchGitDiff(props.projectId, group, path));
-		} catch {
-			setDiff(null);
-		} finally {
-			setDiffLoading(false);
-		}
-	};
-
-	if (loading) {
-		return (
-			<div className="flex items-center justify-center gap-2 py-10 text-caption text-muted-foreground">
-				<Loader2 className="size-4 animate-pideck-spin" aria-hidden="true" />
-			</div>
-		);
-	}
-	if (noRepo) {
-		return <div className="py-10 text-center text-caption text-muted-foreground">{t("web.gitNoRepo")}</div>;
-	}
-
-	const totalChanges = groups ? groups.merge.length + groups.index.length + groups.workingTree.length + groups.untracked.length : 0;
-
-	return (
-		<div className="flex flex-col gap-3">
-			{branch ? (
-				<div className="flex items-center gap-1.5 text-caption text-foreground">
-					<GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-					<span className="truncate font-medium">{branch.current ?? "—"}</span>
-					<span className="text-muted-foreground">
-						· {t("web.gitChanges")} {totalChanges}
-					</span>
-				</div>
-			) : null}
-			{groups ? <ResourceGroupList label={t("git.mergeChanges")} group="merge" resources={groups.merge} diffPath={diffPath} diff={diff} diffLoading={diffLoading} diffGroup={diffGroup} onOpenDiff={openDiff} /> : null}
-			{groups ? <ResourceGroupList label={t("git.stagedChanges")} group="index" resources={groups.index} diffPath={diffPath} diff={diff} diffLoading={diffLoading} diffGroup={diffGroup} onOpenDiff={openDiff} /> : null}
-			{groups ? <ResourceGroupList label={t("git.changes")} group="workingTree" resources={groups.workingTree} diffPath={diffPath} diff={diff} diffLoading={diffLoading} diffGroup={diffGroup} onOpenDiff={openDiff} /> : null}
-			{groups ? <ResourceGroupList label={t("web.gitUntracked")} group="untracked" resources={groups.untracked} diffPath={diffPath} diff={diff} diffLoading={diffLoading} diffGroup={diffGroup} onOpenDiff={openDiff} /> : null}
-			{commits.length > 0 ? (
-				<section>
-					<h4 className="mb-1.5 text-caption font-medium text-foreground">{t("web.gitHistory")}</h4>
-					<ul className="flex flex-col gap-1">
-						{commits.map((commit) => (
-							<li key={commit.hash} className="rounded-md border border-border bg-card px-2 py-1.5">
-								<div className="flex items-baseline gap-1.5">
-									<code className="shrink-0 text-micro text-primary">{commit.shortHash}</code>
-									<span className="min-w-0 flex-1 truncate text-caption text-foreground">{commit.message}</span>
-								</div>
-								<div className="text-micro text-muted-foreground">
-									{commit.authorName} · {commitDateLabel(commit.authorDate)}
-								</div>
-							</li>
-						))}
-					</ul>
-				</section>
-			) : null}
-		</div>
-	);
-}
-
-function ResourceGroupList(props: {
-	label: string;
-	group: "merge" | "index" | "workingTree" | "untracked";
-	resources: Array<{ path: string; letter: string; oldPath?: string }>;
-	diffPath: string | null;
-	diff: DiffPayload;
-	diffLoading: boolean;
-	diffGroup: string;
-	onOpenDiff: (group: "merge" | "index" | "workingTree" | "untracked", path: string) => void;
-}) {
-	if (props.resources.length === 0) return null;
-	return (
-		<section>
-			<h4 className="mb-1.5 text-caption font-medium text-foreground">
-				{props.label} <span className="text-muted-foreground">({props.resources.length})</span>
-			</h4>
-			<ul className="flex flex-col gap-0.5">
-				{props.resources.slice(0, 30).map((resource) => (
-					<li key={`${resource.path}:${resource.letter}`}>
-						<button
-							type="button"
-							className={cn("flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-caption transition-colors hover:bg-muted/60 pointer-coarse:min-h-9 pointer-coarse:py-1.5", props.diffPath === resource.path && "bg-muted")}
-							onClick={() => props.onOpenDiff(props.group, resource.path)}
-						>
-							<code className={cn("w-4 shrink-0 text-center text-micro font-semibold", resource.letter === "D" ? "text-danger" : resource.letter === "A" ? "text-success" : "text-warning")}>{resource.letter}</code>
-							<span className="min-w-0 flex-1 truncate text-foreground">{resource.path.split(/[\\/]/).pop()}</span>
-							<span className="max-w-32 shrink-0 truncate text-micro text-muted-foreground">{resource.path}</span>
-						</button>
-						{props.diffPath === resource.path && props.diffGroup === props.group ? (
-							props.diffLoading ? (
-								<div className="flex items-center gap-1.5 px-2 py-1.5 text-micro text-muted-foreground">
-									<Loader2 className="size-3 animate-pideck-spin" aria-hidden="true" />
-								</div>
-							) : props.diff ? (
-								<div className="mt-1 grid gap-1.5 rounded-md border border-border bg-card p-2">
-									<div>
-										<div className="mb-0.5 text-micro text-muted-foreground">{t("web.diffOriginal")}</div>
-										{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
-										<pre className="max-h-64 overflow-auto rounded bg-muted/50 p-1.5 text-micro leading-relaxed whitespace-pre-wrap">{props.diff.originalContent || "—"}</pre>
-									</div>
-									<div>
-										<div className="mb-0.5 text-micro text-muted-foreground">{t("web.diffModified")}</div>
-										{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
-										<pre className="max-h-64 overflow-auto rounded bg-muted/50 p-1.5 text-micro leading-relaxed whitespace-pre-wrap">{props.diff.modifiedContent || "—"}</pre>
-									</div>
-								</div>
-							) : (
-								<div className="px-2 py-1.5 text-micro text-muted-foreground">{t("web.diffUnavailableHint")}</div>
-							)
-						) : null}
-					</li>
-				))}
-			</ul>
-		</section>
-	);
-}
-
-// ── 文件面板 ───────────────────────────────────────────────────────────
-
-function FilesPanel(props: { projectId: string; active: boolean; onOpenFile: (path: string) => void }) {
-	const [dir, setDir] = useState("");
-	const [nodes, setNodes] = useState<WebFileNodeLite[]>([]);
-	const [loading, setLoading] = useState(false);
-
-	const loadList = useCallback(
-		async (nextDir: string) => {
-			setLoading(true);
-			try {
-				setNodes(await fetchFileList(props.projectId, nextDir || undefined));
-			} catch {
-				setNodes([]);
-			} finally {
-				setLoading(false);
-			}
-		},
-		[props.projectId],
-	);
-
-	useEffect(() => {
-		if (props.active) void loadList(dir);
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- dir 变化由导航按钮显式触发 loadList
-	}, [props.active, dir, loadList]);
-
-	const crumbs = dir ? dir.split("/").filter(Boolean) : [];
-
-	return (
-		<div className="flex flex-col gap-2">
-			{/* 面包屑导航：项目根 / 一级 / … */}
-			<div className="flex min-w-0 flex-wrap items-center gap-0.5 text-caption">
-				<button type="button" className="rounded px-1 py-0.5 text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground pointer-coarse:py-1.5" onClick={() => setDir("")}>
-					{t("web.filesTab")}
-				</button>
-				{crumbs.map((crumb, index) => (
-					<span key={`${crumb}-${index}`} className="flex min-w-0 items-center gap-0.5">
-						<ChevronRight className="size-3 shrink-0 text-muted-foreground/60" aria-hidden="true" />
-						<button type="button" className="max-w-32 truncate rounded px-1 py-0.5 text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground pointer-coarse:py-1.5" onClick={() => setDir(crumbs.slice(0, index + 1).join("/"))}>
-							{crumb}
-						</button>
-					</span>
-				))}
-			</div>
-			{loading ? (
-				<div className="flex items-center justify-center gap-2 py-8 text-caption text-muted-foreground">
-					<Loader2 className="size-4 animate-pideck-spin" aria-hidden="true" />
-				</div>
-			) : (
-				<ul className="flex flex-col gap-0.5">
-					{nodes.map((node) => (
-						<li key={node.relativePath}>
-							<button type="button" className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-caption transition-colors hover:bg-muted/60 pointer-coarse:min-h-9 pointer-coarse:py-1.5" onClick={() => (node.type === "directory" ? setDir(node.relativePath) : props.onOpenFile(node.relativePath))}>
-								{node.type === "directory" ? <Folder className="size-3.5 shrink-0 text-primary/70" aria-hidden="true" /> : <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
-								<span className="min-w-0 flex-1 truncate text-foreground">{node.name}</span>
-							</button>
-						</li>
-					))}
-				</ul>
-			)}
-		</div>
-	);
+export function useWorkspacePanel(): [WebWorkspacePanel, (panel: WebWorkspacePanel) => void] {
+	const [panel, setPanel] = useState<WebWorkspacePanel>(() => readStoredWorkspacePanel());
+	const select = useCallback((next: WebWorkspacePanel) => {
+		setPanel(next);
+		storeWorkspacePanel(next);
+	}, []);
+	return [panel, select];
 }

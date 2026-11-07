@@ -69,7 +69,7 @@ PiDeck 桌面能力面统一门面 `piDeckApi` 的契约文档。三层结构：
 | `catalog` | config | PiAiCatalogUpdater（模型目录更新，分支白名单 main/dev） | ipc/catalogIpc.ts | `catalog` | `catalog` | `aggregate` |
 | `pi-auth` | config | PiAuthService（NDJSON 子进程 pi-auth-host.mjs） | ipc/piAuthIpc.ts | `piAuth` | `pi-auth` | `redline`（红线：例外一，pi-auth-host.mjs 只做认证；凭据 pi 自管） |
 | `feishu` | integration | FeishuBridge/FeishuConnection/CardStream | ipc/feishuIpc.ts | `feishu` | `feishu` | `aggregate` |
-| `web` | integration | WebServiceManager + WebEventStream/WebWorkspaceRoutes/WebI18n/WebNetwork | ipc/systemIpc.ts | `settings` | `web` | `aggregate` |
+| `web` | integration | WebServiceManager + WebEventStream/WebWorkspaceRoutes/WebSettingsRoutes/WebI18n/WebNetwork | ipc/systemIpc.ts | `settings` | `web` | `aggregate` |
 | `enhance` | integration | EnhancePromptService（常驻 sidecar pi-enhance-host.mjs） | ipc/enhanceIpc.ts | `enhance` | `enhance` | `redline`（红线：例外四，pi-enhance-host.mjs 单用途补全；禁止通用模型桥） |
 | `prompt-suggestion` | integration | EnhancePromptService（prompt-suggestion 独立实例，systemPrompt 由主进程常量注入） | ipc/promptSuggestionIpc.ts | `suggestion` | `suggest` | `redline`（红线：例外四，与 enhance 共用协议但独立实例；渲染层禁传 systemPrompt/userText） |
 | `agent-profiles` | integration | AgentProfileStore + AgentInvokeService（划词工具一次性调用，复用 pi-enhance-host sidecar 独立实例） | ipc/agentProfilesIpc.ts + ipc/agentInvokeIpc.ts | `agentProfiles` | `agent-profiles` | `aggregate`（例外四：systemPrompt 只能由主进程按 agentId 解析） |

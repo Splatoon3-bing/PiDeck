@@ -235,6 +235,8 @@ export class WebServiceManager {
 	} | null = null;
 	/** P1-P3 工作区路由（git/files/prompts）；未装配时这些路由 404。由 main/index.ts 在构造后注入。 */
 	workspaceRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 设置路由（白名单投影/写入）；未装配时 /api/settings 走 404。由 main/index.ts 在构造后注入。 */
+	settingsRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
@@ -496,7 +498,8 @@ export class WebServiceManager {
 		if (await this.apiRoutes.handle(url, request, response)) return;
 
 		if (url.pathname.startsWith("/api/")) {
-			// P1-P3 工作区路由（git/files/prompts）：独立模块承载，返回 false 表示未命中
+			// 设置（白名单投影/写入）与工作区路由（git/files/prompts）：独立模块承载，返回 false 表示未命中
+			if (this.settingsRoutes && (await this.settingsRoutes.handle(url, request, response))) return;
 			if (this.workspaceRoutes && (await this.workspaceRoutes.handle(url, request, response))) return;
 			this.sendError(response, 404, "webError.apiNotFound", "API not found");
 			return;
