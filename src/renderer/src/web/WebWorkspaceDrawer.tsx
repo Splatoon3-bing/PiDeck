@@ -6,6 +6,7 @@
  *   original/modified）+ 最近提交。写入类操作（commit/stage）仍回桌面完成。
  * - 文件：项目内目录浏览（面包屑导航）+ 有界文本预览（512KB / 二进制拦截，
  *   边界在后端 WebWorkspaceRoutes 强制）；点击文件交给全屏预览（WebFilePreview），抽屉只负责导航。
+ * - 桌面是与会话并排的右栏，不再用遮罩盖住整个页面；手机保留覆盖式抽屉。
  */
 import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, FileText, Folder, GitBranch, Loader2, X } from "lucide-react";
@@ -16,36 +17,59 @@ import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { fetchFileList, fetchGitDiff, fetchGitLog, fetchGitStatus } from "./webApi";
 import { useDismissOnBack } from "./useDismissOnBack";
+import { useIsMobileViewport } from "./useIsMobileViewport";
 import type { WebFileNodeLite } from "./webTypes";
 
 export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; onClose: () => void; onOpenFile: (path: string) => void }) {
+	const mobile = useIsMobileViewport();
 	// 系统返回键/手势关闭（手机上抽屉是全屏覆盖层，与预览同一关闭语义）
-	useDismissOnBack(props.onClose, props.open);
+	useDismissOnBack(props.onClose, props.open && mobile);
+	useEffect(() => {
+		if (!props.open || mobile) return;
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === "Escape") props.onClose();
+		};
+		document.addEventListener("keydown", closeOnEscape);
+		return () => document.removeEventListener("keydown", closeOnEscape);
+	}, [mobile, props.open, props.onClose]);
+
+	const content = (
+		<>
+			<div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+				<strong className="text-sm font-semibold">{t("web.workspaceDrawer")}</strong>
+				<Button type="button" variant="ghost" size="icon" className="size-9 pointer-coarse:size-11" onClick={props.onClose} aria-label={t("common.close")}>
+					<X className="size-5" aria-hidden="true" />
+				</Button>
+			</div>
+			<Tabs defaultValue="git" className="flex min-h-0 flex-1 flex-col gap-0">
+				<TabsList className="mx-3 mt-2 grid w-auto shrink-0 grid-cols-2">
+					<TabsTrigger value="git">{t("web.gitTab")}</TabsTrigger>
+					<TabsTrigger value="files">{t("web.filesTab")}</TabsTrigger>
+				</TabsList>
+				{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
+				<TabsContent value="git" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+					<GitPanel projectId={props.projectId} active={props.open} />
+				</TabsContent>
+				{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
+				<TabsContent value="files" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+					<FilesPanel projectId={props.projectId} active={props.open} onOpenFile={props.onOpenFile} />
+				</TabsContent>
+			</Tabs>
+		</>
+	);
+
+	if (!mobile) {
+		return (
+			<aside className="h-full w-[clamp(20rem,32vw,28rem)] shrink-0 border-l border-border bg-background" aria-label={t("web.workspaceDrawer")}>
+				<div className="flex h-full min-h-0 flex-col">{content}</div>
+			</aside>
+		);
+	}
 	return (
-		<div className={cn("fixed inset-0 z-50", props.open ? "pointer-events-auto" : "pointer-events-none")} aria-hidden={!props.open}>
-			{/* 遮罩：点击关闭（仅打开时可见） */}
-			<div className={cn("absolute inset-0 bg-black/30 transition-opacity", props.open ? "opacity-100" : "opacity-0")} onClick={props.onClose} />
-			<aside className={cn("absolute top-0 right-0 bottom-0 flex w-[min(400px,100vw)] flex-col border-l border-border bg-background shadow-xl transition-transform duration-200", props.open ? "translate-x-0" : "translate-x-full")} aria-label={t("web.workspaceDrawer")}>
-				<div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-					<strong className="text-sm font-semibold">{t("web.workspaceDrawer")}</strong>
-					<Button type="button" variant="ghost" size="icon" className="size-11" onClick={props.onClose} aria-label={t("common.close")}>
-						<X className="size-5" aria-hidden="true" />
-					</Button>
-				</div>
-				<Tabs defaultValue="git" className="flex min-h-0 flex-1 flex-col gap-0">
-					<TabsList className="mx-3 mt-2 grid w-auto grid-cols-2">
-						<TabsTrigger value="git">{t("web.gitTab")}</TabsTrigger>
-						<TabsTrigger value="files">{t("web.filesTab")}</TabsTrigger>
-					</TabsList>
-					{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
-					<TabsContent value="git" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-						<GitPanel projectId={props.projectId} active={props.open} />
-					</TabsContent>
-					{/* scroll-ok: nested —— 行列表在子组件里（本层只是滚动窗），虚拟化要先把行模型提到这一层。 */}
-					<TabsContent value="files" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-						<FilesPanel projectId={props.projectId} active={props.open} onOpenFile={props.onOpenFile} />
-					</TabsContent>
-				</Tabs>
+		<div className="fixed inset-0 z-50">
+			<div className="absolute inset-0 bg-black/30" onClick={props.onClose} />
+			<aside className="absolute inset-y-0 right-0 flex w-[min(400px,100vw)] flex-col border-l border-border bg-background shadow-xl animate-in slide-in-from-right duration-200" aria-label={t("web.workspaceDrawer")}>
+				{content}
 			</aside>
 		</div>
 	);

@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: e54889dd385034c9bb9de6572a20abb8d2721f3baedeea707f07bfca07ce15d4（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 39178790f248447a7d2f40bfb6b8bdb1bac0f2ab8fa21945463d0a575a124a64（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -6519,6 +6519,7 @@ export const zhTW: Record<TranslationKey, string> = {
 	"diagnostic.failureToastTitle": "會話失敗",
 	"diagnostic.extensionErrorToastTitle": "擴充套件執行錯誤",
 	"diagnostic.retryTitle": "自動重試",
+	"diagnostic.compactInProgress": "上下文壓縮仍在進行，這條訊息沒有發出；壓縮完成後請重新發送。",
 	"health.check.pi.installed": "Pi 安裝狀態",
 	"health.check.pi.installed.hint": "檢查 Pi 是否已安裝且能讀出版本。未安裝或版本讀取失敗時，會話無法正常啟動。",
 	"health.check.config.parsable": "Pi 配置檔案可解析",
@@ -6600,6 +6601,11 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.dshTools": "DSH 工具",
 	"web.connected": "已連線",
 	"web.connecting": "連線中…",
+	"web.applyUpdate": "更新",
+	"web.applyUpdateHint": "前端已重新構建，點選載入新版本",
+	"web.recentModels": "最近使用",
+	"web.modelCapabilityReasoning": "推理",
+	"web.modelCapabilityVision": "視覺",
 	"web.promptPlaceholder": "傳送訊息到當前會話",
 	"web.promptPlaceholderEmpty": "輸入訊息即可新建會話，或從左側選擇專案、現有會話",
 	"web.composerHint": "Enter 傳送，Shift+Enter 換行",

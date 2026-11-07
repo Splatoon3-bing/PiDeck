@@ -77,34 +77,36 @@
   --color-code-text: #d1d5db;
 }
 
-/* 暗色：dsh 设计语言的近黑分层（等价推导值，与导出 HTML / 官方暗色观感一致） */
+/* 暗色：纯黑底（OLED / 夜间阅读）。中性灰阶，不带蓝调；层次靠 1px 描边与浮层抬升，
+   不再靠「更亮的底色」——纯黑上任何大面积提亮都会显得发灰。 */
 :root[data-theme="dark"] {
-  --color-bg-app: #0d0f14;        /* layer-1 */
-  --color-bg-sidebar: #131620;    /* layer-2 */
-  --color-bg-panel: #131620;      /* layer-2 */
-  --color-bg-popover: #1a1e2c;    /* layer-3 */
-  --color-bg-input: #0d0f14;
-  --color-bg-muted: #1a1e2c;      /* layer-3 */
-  --color-bg-hover: #232838;      /* interactive hover */
-  --color-bg-active: #2a3042;     /* interactive active */
-  --color-chat-card-bg: #131620;
-  --color-chat-muted-bg: #171a26;
+  --color-bg-app: #000000;        /* layer-1 纯黑 */
+  --color-bg-sidebar: #000000;    /* 侧栏与聊天区同底，靠 border-right 分层 */
+  --color-bg-panel: #000000;      /* 聊天画布 / 卡片面 */
+  --color-bg-popover: #101114;    /* layer-3：浮层必须抬一档，否则看不出层次 */
+  --color-bg-input: #0a0b0d;
+  --color-bg-muted: #1a1b1f;      /* layer-3 控件面 */
+  --color-bg-hover: #232429;      /* interactive hover */
+  --color-bg-active: #2d2e34;     /* interactive active */
+  --color-chat-card-bg: #0b0c0e;
+  --color-chat-muted-bg: #141519;
 
-  --color-text-primary: #e8eaf2;
-  --color-text-secondary: #9aa1b5;
-  --color-text-tertiary: #6b7288;
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #a6a7ad;
+  --color-text-tertiary: #74757c;
   --color-text-inverse: #ffffff;
 
-  --color-border-subtle: rgb(255 255 255 / 6%);
-  --color-border-default: rgb(255 255 255 / 10%);
-  --color-border-strong: rgb(255 255 255 / 18%);
+  /* 纯黑底上描边要比近黑底更实一档，否则卡片边界缺失 */
+  --color-border-subtle: rgb(255 255 255 / 8%);
+  --color-border-default: rgb(255 255 255 / 13%);
+  --color-border-strong: rgb(255 255 255 / 22%);
 
   --color-accent: #7d96ff;
   --color-accent-strong: #93a9ff;
-  --color-accent-soft: #1c2748;
-  --color-user-bubble: #1c2748;
-  --color-row-hover: #171d2b;
-  --color-row-active: #1e2a4d;
+  --color-accent-soft: #17233f;
+  --color-user-bubble: #17233f;
+  --color-row-hover: #121316;
+  --color-row-active: #17233f;
   --color-danger: #f87171;
   --color-danger-soft: rgb(248 113 113 / 12%);
   --color-success: #4ade80;
@@ -117,7 +119,7 @@
   --color-tool: var(--color-info);
   --color-thinking: #818cf8;      /* indigo-400 */
 
-  --color-code-bg: #171a26;
+  --color-code-bg: #0b0c0e;
   --color-code-text: #d1d5db;
 }
 
@@ -138,7 +140,8 @@
 /* 侧栏：layer-2 表面 + 细边框；会话行 hover 用 interactive hover 面 */
 .web-app .chat-list-pane {
   background: var(--color-bg-sidebar);
-  border-right-color: var(--color-border-subtle);
+  /* 纯黑主题下侧栏与聊天区同底，分隔线必须用 default 档（subtle 8% 在黑底上几乎看不见） */
+  border-right-color: var(--color-border-default);
 }
 
 .web-app .conversation.agent-row:hover,
@@ -279,6 +282,11 @@
 .web-app .web-send:disabled {
   background: var(--color-bg-muted);
   color: var(--color-text-tertiary);
+}
+/* 暗色主色是浅蓝（#7d96ff）：白箭头对比度只有 2.7:1，改深蓝黑墨（≈7.6:1）。
+   浅色主题的主色深，白字仍是对的，因此只覆盖暗色。 */
+[data-theme="dark"] .web-app .web-send:not(:disabled) {
+  color: #0b0c0e;
 }
 
 /* 滚动条（--dsh-scrollbar-* 语义：细滚动条 + 低调 thumb） */

@@ -23,6 +23,8 @@ export type WebRecoveryTrigger = "poll" | "visibility" | "online" | "error";
 
 export type WebRecoveryDecisionInput = {
 	status: WebStreamStatus;
+	/** useChat 的原始错误：网络异常是 TypeError；服务端 SSE error 帧是普通 Error（业务拒绝）。 */
+	error?: unknown;
 	/** 本次决策由谁触发（缺省按「可见性/网络」这类非轮询触发器处理）。 */
 	trigger?: WebRecoveryTrigger;
 	/** pi runtime 仍在跑（running/starting）；ready 态恢复必须带它，避免误拉空闲会话。 */
@@ -45,9 +47,14 @@ export type WebRecoveryDecision = {
 export const WEB_RECOVERY_DEBOUNCE_MS = 5000;
 
 export function decideStreamRecovery(input: WebRecoveryDecisionInput): WebRecoveryDecision {
-	const { status, runtimeBusy, documentVisible, online, lastAttemptAt, now, trigger } = input;
+	const { status, runtimeBusy, documentVisible, online, lastAttemptAt, now, trigger, error } = input;
 	// 不可见页面不追（拉了也没人看；等回前台再触发）
 	if (!documentVisible || !online) return { recover: false, notify: false };
+	// error ≠ 断网：/api/chat 预检拒绝（如 DSH runtime 未安装）经 SSE error 帧产生普通
+	// Error，网络异常则由 fetch 抛 TypeError。业务拒绝必须保留原始错误供用户处理；
+	// 不能拉一份磁盘快照后 clearError，更不能谎报「网络已恢复」。所有触发器共用此门禁，
+	// 否则 error 之后的 visibility/online 事件仍会把真实错误抹掉。
+	if (status === "error" && !(error instanceof TypeError)) return { recover: false, notify: false };
 	// 主轮询只负责「脱节态」：useChat 已回 ready 但 runtime 仍在跑。本端流还活着
 	// （submitted/streaming）时磁盘快照必然落后于在途帧，套用会把正在出的回复整段抹掉
 	// （用户报障：发消息后最新一条回复消失、过一会才又出现）。回前台/网络恢复仍允许

@@ -5,10 +5,16 @@ export function useIsMobileViewport(): boolean {
 	const [mobile, setMobile] = useState(() => isMobileViewport(readViewportWidth()));
 	useEffect(() => {
 		const media = window.matchMedia(`(max-width: ${WEB_MOBILE_MAX_WIDTH}px)`);
-		const sync = () => setMobile(media.matches);
+		// 浏览器窗口恢复/屏幕旋转时，Electron 偶发漏发 MediaQueryList change；
+		// resize 直接读取 innerWidth，避免 CSS 已是窄屏而 React 仍停留在桌面弹层。
+		const sync = () => setMobile(isMobileViewport(window.innerWidth));
 		sync();
+		window.addEventListener("resize", sync);
 		media.addEventListener("change", sync);
-		return () => media.removeEventListener("change", sync);
+		return () => {
+			window.removeEventListener("resize", sync);
+			media.removeEventListener("change", sync);
+		};
 	}, []);
 	return mobile;
 }

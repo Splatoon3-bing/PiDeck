@@ -125,7 +125,8 @@
     "test:e2e": "npm run build:fast && playwright test",
     "e2e": "playwright test",
     "verify": "npm run typecheck && npm test && npm run test:e2e",
-    "probe:dsh": "node scripts/dsh-embed-probe.mjs"
+    "probe:dsh": "node scripts/dsh-embed-probe.mjs",
+    "deploy:web": "node scripts/deploy-web.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",

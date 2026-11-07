@@ -8,6 +8,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { request as httpRequest } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { Readable } from "node:stream";
 import { extname, join, normalize, sep } from "node:path";
@@ -21,6 +22,8 @@ export class WebStaticAssets {
 	private readonly rendererRoot: string;
 	/** web.html 改写后的缓存（按文件 mtime 失效）：避免每次页面请求都重读重改写。 */
 	private webEntryHtmlCache: { mtimeMs: number; html: string } | null = null;
+	/** 构建指纹缓存（同样按 web.html 的 mtime 失效）。 */
+	private buildIdCache: { mtimeMs: number; id: string } | null = null;
 	/** dev 模式被劫持的 upgrade socket 集合；stop() 时统一销毁。 */
 	private readonly hijackedSockets = new Set<Duplex>();
 
@@ -72,6 +75,25 @@ export class WebStaticAssets {
 			return;
 		}
 		await sendFile(filePath, response);
+	}
+
+	/**
+	 * 当前对外服务的构建指纹（web.html 的 sha1 前 12 位）。
+	 *
+	 * 资源文件名带 content hash，重新构建后 web.html 引用的 bundle 名会变，指纹随之变化；
+	 * Web 端据此判断「桌面端已重新构建、当前页面仍是旧 bundle」，由用户主动点「更新」重载。
+	 * 不这样做的话，重建后旧页面引用的旧 asset 已不存在，正在使用的会话会直接白屏/404。
+	 * dev 代理模式没有构建产物（资源来自 vite dev server），返回空串表示不参与检测。
+	 */
+	buildId(): string {
+		if (this.devRendererUrl) return "";
+		const webEntry = join(this.rendererRoot, "web.html");
+		if (!existsSync(webEntry)) return "";
+		const mtimeMs = statSync(webEntry).mtimeMs;
+		if (this.buildIdCache && this.buildIdCache.mtimeMs === mtimeMs) return this.buildIdCache.id;
+		const id = createHash("sha1").update(readFileSync(webEntry, "utf8")).digest("hex").slice(0, 12);
+		this.buildIdCache = { mtimeMs, id };
+		return id;
 	}
 
 	/** web.html 服务出口：相对资源引用改写为绝对路径（/s/<id> 路由下 ./assets 会 404 白屏，见 webHtmlAssetUrls.ts）。按 mtime 缓存改写结果。 */

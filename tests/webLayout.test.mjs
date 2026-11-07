@@ -23,9 +23,10 @@ test("Web project rows can collapse after the active session is revealed", () =>
 	assert.match(webSidebar, /const expanded = searching \|\| expandedProjects\.has\(project\.id\)/);
 });
 
-test("Web model picker lives in a searchable bottom sheet, header stays one row", () => {
-	// 模型选择器已从头部的 Command 弹层迁到 composer 的 WebBottomSheet（第三批瘦身）：
-	// 搜索输入在 sheet 内，header 不再携带 CommandInput。
+test("Web model picker lives in a responsive local picker, header stays one row", () => {
+	// 手机保持 BottomSheet；桌面锚定 composer 按钮弹局部 Popover，不再居中盖住整页。
+	assert.match(webModelSheet, /WebPickerSurface/);
+	assert.match(readFileSync("src/renderer/src/web/WebPickerSurface.tsx", "utf8"), /side="top"/);
 	assert.match(webModelSheet, /placeholder=\{t\("web\.modelSearch"\)\}/);
 	assert.match(webModelSheet, /t\("web\.modelEmpty"\)/);
 	assert.doesNotMatch(webHeader, /CommandInput/);

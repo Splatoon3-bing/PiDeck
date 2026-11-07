@@ -42,10 +42,19 @@ test("ready + runtime 忙也受防抖限制（不造成追赶风暴）", () => {
 	assert.equal(decideStreamRecovery({ ...base, status: "ready", runtimeBusy: true, lastAttemptAt: base.now - WEB_RECOVERY_DEBOUNCE_MS - 1 }).recover, true);
 });
 
-test("error 态立即恢复并提示用户", () => {
-	const decision = decideStreamRecovery({ ...base, status: "error" });
+test("传输层 TypeError 立即恢复并提示用户", () => {
+	const decision = decideStreamRecovery({ ...base, status: "error", error: new TypeError("Failed to fetch") });
 	assert.equal(decision.recover, true);
 	assert.equal(decision.notify, true);
+});
+
+test("服务端业务拒绝不走断线恢复，也不被后续回前台/online 事件掩盖", () => {
+	const error = new Error("DSH runtime is not installed");
+	for (const trigger of ["error", "visibility", "online"]) {
+		const decision = decideStreamRecovery({ ...base, status: "error", trigger, error });
+		assert.equal(decision.recover, false, trigger);
+		assert.equal(decision.notify, false, trigger);
+	}
 });
 
 test("submitted/streaming 回前台恢复但不打扰（静默补齐）", () => {
@@ -97,7 +106,7 @@ test("回前台/网络恢复仍允许追活跃流（手机节流兑底）", () =
 });
 
 test("error 触发器带上损坏的 live status 也能恢复并提示", () => {
-	const decision = decideStreamRecovery({ ...base, trigger: "error", status: "error" });
+	const decision = decideStreamRecovery({ ...base, trigger: "error", status: "error", error: new TypeError("Network error") });
 	assert.equal(decision.recover, true);
 	assert.equal(decision.notify, true);
 });

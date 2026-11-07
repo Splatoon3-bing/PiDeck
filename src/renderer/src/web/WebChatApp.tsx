@@ -42,6 +42,7 @@ import { shouldFlushQueuedPrompt } from "./webQueueFlush";
 import { sessionUiMessagesToMarkdown } from "./webMarkdown";
 import { removeMessageOptimistic, replaceMessageTextOptimistic } from "./webMessageOptimistic";
 import { WebSessionStrips } from "./WebSessionStrips";
+import { hasNewerBuild, recordLoadedBuildId } from "./webBuildUpdate";
 
 /** 搜索命中落在未加载历史里时，最多向前补拉多少页（每页一个历史窗口，约 9 轮）。 */
 const MAX_SEARCH_JUMP_PAGES = 5;
@@ -122,6 +123,9 @@ export function WebChatApp() {
 	const [dshToolsOpen, setDshToolsOpen] = useState(false);
 	// P1：workspace 抽屉 / 重命名 / 删除确认
 	const [workspaceOpen, setWorkspaceOpen] = useState(false);
+	// 前端 bundle 自更新：基线 = 本页加载时的构建指纹；指纹一变只亮「更新」按钮，不一自动重载。
+	const loadedBuildIdRef = useRef<string | null>(null);
+	const [buildUpdateAvailable, setBuildUpdateAvailable] = useState(false);
 	const [renameDraft, setRenameDraft] = useState<{ sessionId: string; title: string } | null>(null);
 	const [renameValue, setRenameValue] = useState("");
 	const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -302,6 +306,7 @@ export function WebChatApp() {
 		const maybeRecover = (trigger: "poll" | "visibility" | "online" | "error") => {
 			const decision = decideStreamRecovery({
 				status: statusRef.current,
+				error,
 				trigger,
 				runtimeBusy: activeRuntimeRef.current?.status === "running" || activeRuntimeRef.current?.status === "starting",
 				documentVisible: !document.hidden,
@@ -323,7 +328,7 @@ export function WebChatApp() {
 			document.removeEventListener("visibilitychange", onVisibility);
 			window.removeEventListener("online", onOnline);
 		};
-	}, [status]);
+	}, [status, error]);
 
 	// 回前台主动收掉死流：本端 /api/chat 的 SSE 是 POST 响应，后台断流后浏览器不会重放它，
 	// 页面只能看到半截内容（或等到 error 态）。这里把这条死流停掉，交给外部流订阅接管——
@@ -601,6 +606,8 @@ export function WebChatApp() {
 				// 安全等级（全局默认/覆盖/等级表）不在会话/runtime 字段里，必须单独进指纹；
 				// 否则 SSE 只推安全变更时 setState 被跳过，菜单停在旧等级。
 				JSON.stringify(state.security ?? null),
+				// 构建指纹同样必须进指纹：重建只改它，漏了会让「更新」按钮永远不出来。
+				state.buildId ?? "",
 			].join("|");
 		// payload：SSE state 事件的现成载荷（/api/state 同构），有则免一次拉取。
 		// 形状由服务端 serializePublicWebPayload 保证；这里只做最小字段防御（缺 runtimes 视为畸形，回退拉取）。
@@ -610,6 +617,9 @@ export function WebChatApp() {
 				// null = 304 未变化：直接结束（连指纹比较都省了，state 引用保持不变）
 				if (disposed || next === null) return;
 				setConnected(true);
+				// 基线与当前指纹对齐：首次落地即记录本页版本，之后的变化才算「有新版本」。
+				loadedBuildIdRef.current = recordLoadedBuildId(loadedBuildIdRef.current, next.buildId);
+				setBuildUpdateAvailable(hasNewerBuild(loadedBuildIdRef.current, next.buildId));
 				const fingerprint = fingerprintOf(next);
 				const unchanged = fingerprint === lastStateFingerprintRef.current;
 				lastStateFingerprintRef.current = fingerprint;
@@ -1437,6 +1447,10 @@ export function WebChatApp() {
 				onCreateSession={(projectId) => void handleCreateSession(projectId)}
 				onCreateProject={handleCreateProject}
 				onDeleteProject={handleDeleteProject}
+				updateAvailable={buildUpdateAvailable}
+				// 只重载本页：SW 静态资源是 network-first，重载即拿到新 bundle；
+				// 不用 location.replace 清 route，保留当前会话地址。
+				onApplyUpdate={() => window.location.reload()}
 			/>
 			<main className="chat-pane flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-panel" onTouchStart={onMainTouchStart} onTouchMove={onMainTouchMove} onTouchEnd={onMainTouchEnd} onTouchCancel={onMainTouchEnd}>
 				<WebHeader
@@ -1583,13 +1597,13 @@ export function WebChatApp() {
 					onResumeQueue={() => setQueuePausedBoth(false)}
 				/>
 			</main>
+			{/* 桌面工作区与会话并排，移动端仍是覆盖式抽屉。 */}
+			{workspaceOpen && activeSession ? <WebWorkspaceDrawer projectId={activeSession.projectId} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} onOpenFile={openFilePreview} /> : null}
 			{/* S6.3：DSH 工具面板（仅 dsh 会话头部按钮触发） */}
 			{/* 第二批：会话内搜索（Ctrl+K）与技能/扩展面板 */}
 			<WebSearchDialog open={searchOpen} onOpenChange={setSearchOpen} sessionId={activeSessionId} messages={messages} onJump={jumpToSearchHit} />
 			<WebSkillsExtensionsDialog open={assetsOpen} onOpenChange={setAssetsOpen} />
 			{dshToolsOpen && activeSessionId && <WebDshToolsPanel sessionId={activeSessionId} onClose={() => setDshToolsOpen(false)} />}
-			{/* P3：工作区抽屉（Git 状态/diff + 文件浏览，projectId 来自活跃会话） */}
-			{workspaceOpen && activeSession && <WebWorkspaceDrawer projectId={activeSession.projectId} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} onOpenFile={openFilePreview} />}
 			{/* 第三批：文件/diff 全屏预览（消息文件链接 + 文件变更 strip chip） */}
 			{filePreview ? <WebFilePreview target={filePreview} onClose={() => setFilePreview(null)} /> : null}
 			{/* P1：重命名会话对话框 */}

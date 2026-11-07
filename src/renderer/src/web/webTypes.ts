@@ -78,6 +78,11 @@ export type WebState = {
 	security?: WebSecurityState;
 	/** 宿主应用版本号（侧栏底栏展示）；缺失=服务端未下发，不渲染版本位 */
 	version?: string;
+	/**
+	 * 当前服务端 bundle 的构建指纹（web.html hash）。页面首次拿到时记为「本页版本」，
+	 * 后续变化（桌面端重新构建）只提示可更新，是否重载由用户点击决定。
+	 */
+	buildId?: string;
 };
 
 /** /api/state 下发的 ACP 工具条目（command/args/env 不外发）。 */

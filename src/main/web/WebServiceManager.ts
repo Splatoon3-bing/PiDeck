@@ -579,6 +579,7 @@ export class WebServiceManager {
 		// 切会话/流结束时拉 /messages/page）。
 		const sessions = await this.deps.listCatalogSessions();
 		const runtimes = this.deps.listSessionRuntimes();
+		const buildId = this.staticAssets.buildId();
 		return {
 			projects: this.deps.listProjects(),
 			// 会话按 Web 可见字段投影：filePath/environment/dshSessionId/agentPreset/preview/
@@ -594,6 +595,9 @@ export class WebServiceManager {
 			...(this.deps.getSecurityConfig ? { security: toWebSecurityState(this.deps.getSecurityConfig()) } : {}),
 			// 宿主版本号：侧栏底栏展示用（常量，进 ETag 不影响命中）。
 			...(this.deps.getAppVersion ? { version: this.deps.getAppVersion() } : {}),
+			// 构建指纹：Web 端对比「打开页面时」与「服务端当前」的 bundle 版本，发现重建后
+			// 只展示「更新」按钮，不自动重载——否则重建瞬间正在用的手机页面会因旧 asset 404 白屏。
+			...(buildId ? { buildId } : {}),
 		};
 	}
 
