@@ -338,10 +338,10 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 ## Task T6: 终端（默认关闭）
 
 **Priority:** P0  
-**Estimate:** 8h  
+**Estimate:** 8h（S1–S5 切片）  
 **Dependencies:** 安全评审  
 **Covers:** FR-010, NFR-001, NFR-007  
-**Status:** pending
+**Status:** pending（安全评审已出：[t6-terminal-security-review.md](./t6-terminal-security-review.md)，等确认 §8 后从 S1 开工）
 
 - 新增 `webTerminalEnabled`（默认 false）。
 - `WebTerminalRoutes` WebSocket：token、会话归属、输入/尺寸/关闭、并发/缓冲上限。
@@ -361,6 +361,19 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-07 — T6 S1（Web 终端骨架，不开 PTY）
+
+- 安全评审：`t6-terminal-security-review.md`（C1–C20、威胁模型、验收、S1–S5 切片）；门禁值确认：每 token 4 / 全局 16、断线不自动重连。
+- 设置：`webTerminalEnabled` 默认 false + 启动归一化（脏值回落 false）+ 桌面「设置 → Web 服务」开关；**不进 Web 设置白名单**（单测断言投影不含该键）。
+- 新增 `WebSocketHandshake`：C1 开关、C2 令牌（常数时间）、C3 Origin 同源（缺/`null`/异源一律拒）、RFC 6455 头齐全性。
+- 新增 `WebSocketFrame`：文本/close/ping/pong 子集；客户端必须 mask；分片/RSV/二进制/控制帧超长/单帧 >64KB 全部 fail-closed。
+- 新增 `WebTerminalRoutes`（S1）：握手限速 10/min（429）、连接登记与审计（`web-terminal`）、帧骨架（create/input/resize/close → `webError.terminalNotReady`）、`closeAll()`。
+- 新增 `WebSocketUpgradeRouter`：`/api/terminal` 优先于 dev HMR 代理；生产模式其它 upgrade 直接销毁。
+- `WebServiceManager`：无条件注册 upgrade 分发 + `stop()` 调 `terminalRoutes.closeAll()`（upgrade 后的 socket 不在 `closeAllConnections` 管理范围）。
+- 装配：`registerWebRoutes` 注入 `terminal: { enabled/requiresAuth/token }`（getter，改设置无需重启）。
+- 验证：`npm run typecheck` 0 错；单测 **175** 条全绿（新增 25：握手 8 / 帧 7 / 路由 8 / 分发 2）；`npx electron-vite build` 通过；`check:format` 通过。
+- 明确未做：S2 PTY（`createTerminal` 注入）、S3 背压细化、S4 Web UI/E2E、S5 文档与部署走查。
 
 ### 2026-11-07 — 非阻断项清理（评审遗留）
 

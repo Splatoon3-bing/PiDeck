@@ -49,6 +49,8 @@ import { openSessionStream, writeSessionStreamError } from "./WebSessionStream";
 import { WebTokenAuth, type WebTokenPolicy } from "./WebTokenAuth";
 import { WebEventStreamRouter, type AgentChannelEventSource, type PiEvent } from "./WebEventStream";
 import { WEB_WRITE_METHODS, WebWriteRateLimiter } from "./WebRateLimit";
+import type { WebTerminalRoutes } from "./WebTerminalRoutes";
+import { resolveUpgradeTarget } from "./WebSocketUpgradeRouter";
 
 type WebServiceSettings = Pick<AppSettings, "webServiceEnabled" | "webServiceHost" | "webServicePort" | "webServiceRequiresAuth" | "webServiceToken" | "webServiceTokenGeneratedAt" | "webServiceTokenExpiresIn">;
 
@@ -239,6 +241,8 @@ export class WebServiceManager {
 	workspaceRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置路由（白名单投影/写入）；未装配时 /api/settings 走 404。由 main/index.ts 在构造后注入。 */
 	settingsRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** Web 终端路由（upgrade 分发）；未装配或开关关闭时握手被拒（403）。 */
+	terminalRoutes: WebTerminalRoutes | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
@@ -357,6 +361,8 @@ export class WebServiceManager {
 		this.eventStreamRouter.unbindChannelSource();
 		this.eventStreamRouter.unbindAcpChannelSource();
 		this.stateHub.dispose();
+		// Web 终端连接（upgrade 后的 socket）不归 server.closeAllConnections 管，必须显式关闭。
+		this.terminalRoutes?.closeAll();
 		if (!this.server) return;
 		const server = this.server;
 		this.server = null;
@@ -444,13 +450,17 @@ export class WebServiceManager {
 			socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
 		});
 
-		// dev 模式：把 WebSocket upgrade 请求（vite HMR 热更新）转发到 dev server，
-		// 否则浏览器连同源的 / 只拿到 HTTP 升级失败，改代码不热更新。
-		if (this.staticAssets.devRendererUrl) {
-			server.on("upgrade", (request, socket, head) => {
-				this.staticAssets.proxyWebSocket(request, socket, head);
-			});
-		}
+		// WebSocket upgrade 分发：
+		// - /api/terminal → Web 终端路由（S1：握手校验；未装配时直接销毁）；
+		// - dev 模式其余路径 → vite HMR 代理（否则改代码不热更新）；
+		// - 生产模式其余路径 → 销毁（没有别的 WS 能力）。
+		server.on("upgrade", (request, socket, head) => {
+			const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+			const target = resolveUpgradeTarget({ pathname: url.pathname, hasTerminalRoutes: this.terminalRoutes !== null, devProxyEnabled: Boolean(this.staticAssets.devRendererUrl) });
+			if (target === "terminal") this.terminalRoutes?.handleUpgrade(request, socket, head);
+			else if (target === "dev-proxy") this.staticAssets.proxyWebSocket(request, socket, head);
+			else socket.destroy();
+		});
 
 		await new Promise<void>((resolve, reject) => {
 			server.once("error", reject);

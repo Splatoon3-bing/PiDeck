@@ -6016,6 +6016,8 @@ export const zhCN = {
 	"settings.webServiceSectionDesc": "局域网访问入口",
 	"settings.webServiceHost": "服务主机",
 	"settings.webServicePort": "服务端口",
+	"settings.webTerminalEnabled": "允许 Web 终端（实验）",
+	"settings.webTerminalEnabledDesc": "在浏览器里打开项目终端。默认关闭：PTY 是最高风险面，开启前请确认 Web 服务只对本机/可信网络开放",
 	"settings.webUseTokenAuth": "启用访问令牌（环回也校验）",
 	"settings.webUseTokenAuthDesc": "开启后访问 Web 服务需要在链接中附带令牌，本机访问也不例外",
 	"settings.webAuthOffWarning": "已关闭令牌鉴权，同一局域网内的任何设备都可以直接访问此服务",

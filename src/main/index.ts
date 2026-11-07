@@ -6835,6 +6835,11 @@ app
 			extensions: extensionManager,
 			settings: settingsStore,
 			onThemeApplied: applyNativeThemeSource,
+			terminal: {
+				enabled: () => settingsStore.get().webTerminalEnabled === true,
+				requiresAuth: () => settingsStore.get().webServiceRequiresAuth ?? true,
+				token: () => webServiceManager.getStatus().token,
+			},
 		});
 		// C12：退出清理登记（before-quit 统一 runAll）
 		quitCleanup.register("theme-schedule", () => clearThemeScheduleTimer());

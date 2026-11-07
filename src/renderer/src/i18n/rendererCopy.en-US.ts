@@ -6047,6 +6047,8 @@ export const enUS: Record<TranslationKey, string> = {
 	"settings.webServiceSectionDesc": "LAN access entry",
 	"settings.webServiceHost": "Service host",
 	"settings.webServicePort": "Service port",
+	"settings.webTerminalEnabled": "Allow web terminal (experimental)",
+	"settings.webTerminalEnabledDesc": "Open project terminals in the browser. Off by default: PTY is the highest-risk surface; enable only when the web service is limited to this machine or a trusted network",
 	"settings.webUseTokenAuth": "Enable access token (loopback too)",
 	"settings.webUseTokenAuthDesc": "When enabled, accessing the web service requires a token in the URL, even from localhost",
 	"settings.webAuthOffWarning": "Token auth is off; any device on the same network can access this service directly",

@@ -23,12 +23,13 @@ import type { SecurityConfig } from "../../shared/types/security";
 import { evaluateUserReadAccess } from "../security/policy";
 import type { SkillManager } from "../skills/SkillManager";
 import type { WebServiceManager } from "./WebServiceManager";
+import { WebTerminalRoutes } from "./WebTerminalRoutes";
 import { WebWorkspaceRoutes } from "./WebWorkspaceRoutes";
 import { createWebSettingsRoutes } from "./WebSettingsRoutes";
 
 export type WebRoutesRegistration = {
-	/** Web 服务实例：只写两个注入点（workspaceRoutes / settingsRoutes）。 */
-	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes">;
+	/** Web 服务实例：写三个注入点（workspaceRoutes / settingsRoutes / terminalRoutes）。 */
+	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes" | "terminalRoutes">;
 	projects: { list: () => Project[] };
 	git: GitService;
 	files: FileSystemService;
@@ -45,6 +46,11 @@ export type WebRoutesRegistration = {
 	settings: { get: () => AppSettings; update: (patch: Partial<AppSettings>) => Promise<AppSettings> };
 	/** 明暗偏好重放（决定原生标题栏/窗体配色，只在 theme 真正被写入时调用）。 */
 	onThemeApplied: (settings: AppSettings) => void;
+	/**
+	 * Web 终端（S1 骨架）：开关/令牌一律用 getter，改设置不需要重启服务。
+	 * S1 不注入 `createTerminal`，create 帧回 webError.terminalNotReady（不开 PTY）。
+	 */
+	terminal: { enabled: () => boolean; requiresAuth: () => boolean; token: () => string };
 };
 
 export function registerWebRoutes(deps: WebRoutesRegistration): void {
@@ -137,4 +143,10 @@ export function registerWebRoutes(deps: WebRoutesRegistration): void {
 	});
 	// 设置路由：白名单投影/写入 + 明暗重放 + 窗口广播，装配细节在 createWebSettingsRoutes。
 	deps.target.settingsRoutes = createWebSettingsRoutes({ settings: deps.settings, onThemeApplied: deps.onThemeApplied });
+	// Web 终端（S1）：只有握手四校验 + 帧协议骨架；PTY 在 S2 注入 createTerminal。
+	deps.target.terminalRoutes = new WebTerminalRoutes({
+		enabled: deps.terminal.enabled,
+		requiresAuth: deps.terminal.requiresAuth,
+		token: deps.terminal.token,
+	});
 }

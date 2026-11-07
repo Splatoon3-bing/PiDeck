@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: 26b1e0e103e1bbfc6b2c46ff93f38bd195c336d386ff93932d4c4c775affe36b（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 96db4af3c168924482d72f63d1c8b5d89ff827053c070348ab31086ad6ef3676（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -6023,6 +6023,8 @@ export const zhTW: Record<TranslationKey, string> = {
 	"settings.webServiceSectionDesc": "區域網訪問入口",
 	"settings.webServiceHost": "服務主機",
 	"settings.webServicePort": "服務埠",
+	"settings.webTerminalEnabled": "允許 Web 終端（實驗）",
+	"settings.webTerminalEnabledDesc": "在瀏覽器裡開啟專案終端。預設關閉：PTY 是最高風險面，開啟前請確認 Web 服務只對本機/可信網路開放",
 	"settings.webUseTokenAuth": "啟用訪問令牌（環回也校驗）",
 	"settings.webUseTokenAuthDesc": "開啟後訪問 Web 服務需要在連結中附帶令牌，本機訪問也不例外",
 	"settings.webAuthOffWarning": "已關閉令牌鑑權，同一區域網內的任何裝置都可以直接訪問此服務",

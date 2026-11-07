@@ -263,6 +263,7 @@ Gitmoji 对应关系：
 	webServiceHost: "0.0.0.0",
 	webServicePort: 8765,
 	webServiceRequiresAuth: true,
+	webTerminalEnabled: false,
 	rpcTimeout: 600_000,
 	linkOpenMode: "external",
 	workspaceContentOpenMode: "split",
@@ -688,6 +689,10 @@ export class SettingsStore {
 			// 新增鉴权开关：旧 settings.json 缺字段或脏值回落 true，默认强制 token 校验。
 			if (typeof this.settings.webServiceRequiresAuth !== "boolean") {
 				this.settings.webServiceRequiresAuth = defaultSettings.webServiceRequiresAuth;
+			}
+			// Web 终端默认关闭：旧配置缺字段/脏值一律回落 false（高风险面不能因缺字段而打开）。
+			if (typeof this.settings.webTerminalEnabled !== "boolean") {
+				this.settings.webTerminalEnabled = defaultSettings.webTerminalEnabled;
 			}
 			// 固定令牌机制：旧 JSON 无该字段 = 尚未生成，留给 WebServiceManager 首次启动生成并回写；
 			// 有值则清洗为 trim 后的 8-128 可打印字符（与设置页/IPC 入口同一约束），越界视为未设置。

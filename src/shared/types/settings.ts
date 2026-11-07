@@ -409,6 +409,13 @@ export type AppSettings = {
 	/** 令牌有效期（ms），0 = 永不过期（默认）；从 generatedAt 起算，到期后请求 401 */
 	webServiceTokenExpiresIn?: number;
 	/**
+	 * Web 终端开关（默认 false）。
+	 *
+	 * 为什么单独一个设置：PTY 是最高风险面，必须可关闭、可审计、可清理；且**不进 Web 设置白名单**
+	 * ——只有桌面上才能打开，浏览器不能给自己开终端（见 docs/specs 001-web-parity T6 安全评审 C1）。
+	 */
+	webTerminalEnabled: boolean;
+	/**
 	 * cloudflared 隧道传输协议：http2 = TCP 443（默认，规避国内 UDP QoS 限速）、
 	 * quic = UDP、auto = cloudflared 自行回退。用户环境差异大，允许调整。
 	 */
@@ -1288,6 +1295,7 @@ export function createDefaultAppSettings(): AppSettings {
 		webServiceHost: "0.0.0.0",
 		webServicePort: 8765,
 		webServiceRequiresAuth: true,
+		webTerminalEnabled: false,
 		rpcTimeout: 600_000,
 		linkOpenMode: "external",
 		workspaceContentOpenMode: "split",
