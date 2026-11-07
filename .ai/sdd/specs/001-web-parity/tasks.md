@@ -341,7 +341,7 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 **Estimate:** 8h（S1–S5 切片）  
 **Dependencies:** 安全评审  
 **Covers:** FR-010, NFR-001, NFR-007  
-**Status:** in-progress（安全评审：[t6-terminal-security-review.md](./t6-terminal-security-review.md)；S1/S2/S4 已完成，S3/S5 待收）
+**Status:** done（安全评审：[t6-terminal-security-review.md](./t6-terminal-security-review.md)；S1–S5 全部完成；部署前手动走查见 S5）
 
 - 新增 `webTerminalEnabled`（默认 false）。
 - `WebTerminalRoutes` WebSocket：token、会话归属、输入/尺寸/关闭、并发/缓冲上限。
@@ -361,6 +361,14 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-07 — T6 S3（协议边界补测）
+
+- 背压：发送队列 >1MB → 1008 断连；**补测时发现并修复递归 bug**（`fail()` 走 `sendFrame()` 时再次命中背压 → `fail` 递归爆栈），close 帧改为直写。
+- 输入速率：同秒累计 >64KB → 1008 断连；输入边界：4096 放行 / 4097 拒绝且不触达 PTY。
+- 全局上限：4 客户端 × 4 tab = 16 后第 17 个被拒（跨连接累计，`requiresAuth=false` 时按对端 IP 分桶）。
+- 验证：typecheck 0 错；针对性单测 **187** 条全绿；四条 Web E2E **14 passed / 1 skipped**；build + check:format 通过。
+- T6 收口：S1–S5 完成。剩余仅部署前手动走查（隧道 Origin/Host、手机软键盘）。
 
 ### 2026-11-07 — T6 S5（文档与边界收尾）
 

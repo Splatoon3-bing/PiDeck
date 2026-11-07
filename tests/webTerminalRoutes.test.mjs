@@ -20,12 +20,12 @@ const HOST = "127.0.0.1:8765";
  * 自己的 data 监听（服务端 101 会被当成客户端帧解析），所以这里用手写两向：
  * write() 收集服务端输出，emitData() 模拟客户端输入。
  */
-function makeSocket() {
+function makeSocket(options = {}) {
 	const chunks = [];
 	const handlers = new Map();
 	const socket = {
 		destroyed: false,
-		writableLength: 0,
+		writableLength: options.writableLength ?? 0,
 		text: () => Buffer.concat(chunks).toString("utf8"),
 		write: (buffer) => {
 			chunks.push(Buffer.from(buffer));
@@ -233,8 +233,13 @@ test("S2 input：归属内转发；超 4KB 拒绝；空内容拒绝", () => {
 	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "ls\n" }));
 	assert.deepEqual(JSON.parse(JSON.stringify(terminal.calls.input)), [{ id: "tab-1", data: "ls\n" }]);
 
+	// 边界：4096 恰好放行，4097 拒绝（服务端 MAX_INPUT_CHARS=4096）
+	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "y".repeat(4096) }));
+	assert.equal(terminal.calls.input.length >= 2, true, "4096-char input should be forwarded");
+	const callsBefore = terminal.calls.input.length;
 	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "x".repeat(4097) }));
 	assert.match(socket.text(), /webError\.terminalInputTooLarge/);
+	assert.equal(terminal.calls.input.length, callsBefore, "oversized input must not reach the PTY");
 
 	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "" }));
 	assert.match(socket.text(), /webError\.invalidFrame/);
@@ -320,4 +325,51 @@ test("S2 输出路由：只有 tab 所属连接收到 data/exit 帧", () => {
 	assert.match(ownerText, /"type":"exit"/);
 	assert.equal(ownerText.includes("should-not-leak"), false);
 	assert.equal(other.socket.text().includes("hello"), false);
+});
+
+/* ── S3：协议边界补测（背压 / 输入速率 / 全局上限） ── */
+
+test("S3 背压：发送队列超过 1MB → 1008 断连，不再无限缓冲", () => {
+	const { routes: instance } = routes({ terminal: fakeTerminal(), resolveTarget: (raw) => raw });
+	const socket = makeSocket({ writableLength: 2 * 1024 * 1024 });
+	instance.handleUpgrade(makeRequest(), socket);
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	// created 帧写入时命中背压：连接被关闭、计数归零，不再继续写
+	assert.equal(instance.openConnectionCount, 0);
+	assert.equal(socket.destroyed, true);
+});
+
+test("S3 输入速率：同一秒累计超过 64KB → 1008 断连", () => {
+	const { routes: instance } = routes({ terminal: fakeTerminal(), resolveTarget: (raw) => raw });
+	const socket = makeSocket();
+	instance.handleUpgrade(makeRequest(), socket);
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	// 每帧 4096 字符：17 帧 = 69632 > 65536 上限
+	for (let index = 0; index < 17; index += 1) {
+		socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "z".repeat(4096) }));
+	}
+	assert.equal(instance.openConnectionCount, 0);
+	assert.equal(socket.destroyed, true);
+});
+
+test("S3 全局上限：16 个 tab 后第 17 个被拒（跨连接累计）", () => {
+	// 关闭鉴权 → 配额 key 退回对端 IP；用不同 IP 模拟多个客户端
+	const instance = routes({ terminal: fakeTerminal(), resolveTarget: (raw) => raw, requiresAuth: () => false }).routes;
+	const sockets = [];
+	for (let connectionIndex = 0; connectionIndex < 4; connectionIndex += 1) {
+		const socket = makeSocket();
+		sockets.push(socket);
+		instance.handleUpgrade(makeRequest({ url: "/api/terminal", remoteAddress: `10.0.0.${connectionIndex + 1}` }), socket);
+		for (let tabIndex = 0; tabIndex < 4; tabIndex += 1) {
+			socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+		}
+		assert.match(socket.text(), /"type":"created"/);
+	}
+	assert.equal(instance.openTabCount, 16);
+
+	const overflow = makeSocket();
+	instance.handleUpgrade(makeRequest({ url: "/api/terminal", remoteAddress: "10.0.0.99" }), overflow);
+	overflow.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	assert.match(overflow.text(), /webError\.terminalLimit/);
+	assert.equal(instance.openTabCount, 16);
 });

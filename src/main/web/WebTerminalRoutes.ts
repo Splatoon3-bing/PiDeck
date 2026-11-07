@@ -429,7 +429,14 @@ export class WebTerminalRoutes {
 	}
 
 	private fail(connection: TerminalConnection, code: number, reason: string): void {
-		this.sendFrame(connection, encodeCloseFrame(code, reason));
+		// close 帧不走 sendFrame：背压用例会让 sendFrame → fail → sendFrame 递归（close 帧很小，直接写）。
+		if (!connection.closed) {
+			try {
+				connection.socket.write(encodeCloseFrame(code, reason));
+			} catch {
+				/* 对端已断：忽略 */
+			}
+		}
 		this.closeConnection(connection);
 	}
 
