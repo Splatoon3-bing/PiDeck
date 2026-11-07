@@ -105,6 +105,27 @@ test("web settings: unknown keys are rejected with 400 and do not partially writ
 });
 
 /**
+ * 桌面端一致性：Web 改设置必须经既有 `settings:apply-window` 广播即时落到桌面窗口，
+ * 而不是等用户重开设置页/重启。这里不导航到 Web 页——直接对服务 POST，观察桌面窗口的
+ * `html[data-theme]` 变化（同一份 SettingsStore 是两端唯一事实来源）。
+ */
+test("web settings: desktop window applies web writes immediately via settings:apply-window", async ({ app }) => {
+	test.setTimeout(120_000);
+	expect(await waitForHealthy()).toBe(true);
+	const page = await app.firstWindow();
+	await expect(page.locator("html")).toHaveAttribute("data-theme", "light", { timeout: 20_000 });
+
+	const response = await fetch(`${BASE}/api/settings`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ theme: "dark" }),
+	});
+	expect(response.ok).toBe(true);
+
+	await expect(page.locator("html")).toHaveAttribute("data-theme", "dark", { timeout: 20_000 });
+});
+
+/**
  * 移动端（390px）走查：设置面板必须能用触控打开、且不产生横向溢出。
  * Electron 窗口没有真触屏，这里验能验的两点：入口可达（⋮ 菜单）+ 布局不溢出。
  */

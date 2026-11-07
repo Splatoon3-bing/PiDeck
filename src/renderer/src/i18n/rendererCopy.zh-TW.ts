@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: ead85bc30a75a356eff5f366d17fc46dd907eb61eac0086357e009762a8f6dbc（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 26b1e0e103e1bbfc6b2c46ff93f38bd195c336d386ff93932d4c4c775affe36b（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -6616,6 +6616,7 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.settingsFollowGlobal": "跟隨全域字號",
 	"web.settingsSessionDefaults": "會話預設",
 	"web.settingsDefaultBackend": "新建會話後端",
+	"web.settingsDefaultBackendDesktopOnly": "桌面端當前預設後端是 Agent CLI / 生圖等 Web 不支援的型別，這裡只展示 pi 兜底值，避免誤當成真實預設",
 	"web.settingsDefaultBackendDesc": "新建會話時預選的後端；已開啟會話不受影響",
 	"web.settingsBackendPi": "Pi",
 	"web.settingsBackendDsh": "DSH",

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type {
 	AgentRuntimeState,
@@ -47,6 +48,7 @@ import { toWebSecurityState } from "./WebSecurityProjection";
 import { openSessionStream, writeSessionStreamError } from "./WebSessionStream";
 import { WebTokenAuth, type WebTokenPolicy } from "./WebTokenAuth";
 import { WebEventStreamRouter, type AgentChannelEventSource, type PiEvent } from "./WebEventStream";
+import { WEB_WRITE_METHODS, WebWriteRateLimiter } from "./WebRateLimit";
 
 type WebServiceSettings = Pick<AppSettings, "webServiceEnabled" | "webServiceHost" | "webServicePort" | "webServiceRequiresAuth" | "webServiceToken" | "webServiceTokenGeneratedAt" | "webServiceTokenExpiresIn">;
 
@@ -241,6 +243,8 @@ export class WebServiceManager {
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
 	private readonly tokenAuth: WebTokenAuth;
+	/** 写路由限速：默认按鉴权主体（token 哈希）或对端 IP 分桶，240 写/分钟。 */
+	private readonly writeRateLimiter = new WebWriteRateLimiter();
 	/** 静态产物出口与 dev 代理（实现已迁到 WebStaticAssets）。 */
 	private readonly staticAssets: WebStaticAssets;
 
@@ -491,6 +495,15 @@ export class WebServiceManager {
 			this.sendError(response, 401, "webError.unauthorized", "A valid web service token is required");
 			return;
 		}
+		// 限速只盖写方法（读/SSE 不限）：写能改设置/文件/Git，脚本刷写需要兜底闸门。
+		// 放在鉴权之后：未授权请求直接 401，不消耗桶。
+		if (url.pathname.startsWith("/api/") && WEB_WRITE_METHODS.has(request.method ?? "")) {
+			const verdict = this.writeRateLimiter.take(this.writeRateLimitKey(request));
+			if (!verdict.allowed) {
+				this.sendError(response, 429, "webError.rateLimited", "Too many write requests", undefined, { "retry-after": String(Math.ceil(verdict.retryAfterMs / 1000)) });
+				return;
+			}
+		}
 		if (url.pathname === "/api/events" && request.method === "GET") {
 			this.stateHub.handle(request, response);
 			return;
@@ -506,6 +519,13 @@ export class WebServiceManager {
 		}
 
 		await this.staticAssets.serve(url, response);
+	}
+
+	/** 限速分桶 key：有 Bearer 时取 token 哈希（不在内存里留明文），无鉴权模式取对端 IP。 */
+	private writeRateLimitKey(request: IncomingMessage): string {
+		const auth = request.headers.authorization;
+		const raw = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : (request.socket?.remoteAddress ?? "unknown");
+		return createHash("sha256").update(raw).digest("hex").slice(0, 16);
 	}
 
 	/**
@@ -643,8 +663,8 @@ export class WebServiceManager {
 		return writeJson(response, body, extraHeaders);
 	}
 
-	private sendError(response: ServerResponse, statusCode: number, code: string, error: string, params?: Record<string, string | number>) {
-		return writeError(response, statusCode, code, error, params);
+	private sendError(response: ServerResponse, statusCode: number, code: string, error: string, params?: Record<string, string | number>, extraHeaders?: Record<string, string>) {
+		return writeError(response, statusCode, code, error, params, extraHeaders);
 	}
 
 	private sendNoContent(response: ServerResponse) {

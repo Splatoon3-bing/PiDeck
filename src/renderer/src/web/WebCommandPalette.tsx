@@ -88,7 +88,7 @@ export function WebCommandPalette(props: { open: boolean; onOpenChange: (open: b
 						aria-label={t("web.commandsPlaceholder")}
 						aria-controls="web-command-list"
 						aria-activedescendant={flat[activeIndex] ? `web-command-${flat[activeIndex].id}` : undefined}
-						className="h-8 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+						className="h-8 border-0 bg-transparent px-0 shadow-none focus-visible:ring-1"
 						onKeyDown={(event) => {
 							if (event.key === "ArrowDown") {
 								event.preventDefault();

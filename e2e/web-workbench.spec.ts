@@ -281,6 +281,29 @@ test("web workbench: notes autosave and read back after reload", async ({ app })
 });
 
 /**
+ * 移动端（390px）工作区：文件面板与 Git 面板都不能产生横向溢出。
+ * 设置面板的 390px 用例在 web-settings.spec.ts；这里补抽屉/分支下拉这两块最容易撑破宽度的区域。
+ * 先在桌面视口建会话并打开抽屉，再缩到 390px —— 移动端侧栏是抽屉，入口本身另有覆盖（设置用例）。
+ */
+test("web workbench: mobile 390px workspace drawer and git panel do not overflow", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	await createSessionIn(page, "GitRepo");
+	const drawer = await openWorkspace(page);
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.waitForTimeout(200);
+
+	const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+	await expect(drawer.getByRole("tab", { name: "文件" })).toHaveAttribute("aria-selected", "true");
+	expect(await overflow()).toBeLessThanOrEqual(0);
+
+	await drawer.getByRole("tab", { name: "Git" }).click();
+	await expect(drawer.getByRole("button", { name: "切换分支" })).toBeVisible({ timeout: 20_000 });
+	expect(await overflow()).toBeLessThanOrEqual(0);
+});
+
+/**
  * 手动视觉走查（默认跳过）：桌面/移动的多标签、工作区三面板。
  *   PIDECK_CAPTURE_WORKBENCH=1 npx playwright test e2e/web-workbench.spec.ts -g "visual"
  * 截图写到 e2e/.snapshots/web-workbench/（已 gitignore），不入库。

@@ -95,7 +95,7 @@ test("GET /api/settings returns the allowlisted projection only", async () => {
 	const result = await call(routes, "/api/settings");
 	assert.equal(result.handled, true);
 	assert.equal(result.status, 200);
-	assert.deepEqual(Object.keys(result.body.settings).sort(), ["chatFontSize", "defaultAgentBackend", "expandInterimDuringStream", "fontSize", "sendShortcut", "theme", "themeScheduleDarkStart", "themeScheduleLightStart", "uiFontSize"]);
+	assert.deepEqual(Object.keys(result.body.settings).sort(), ["chatFontSize", "defaultAgentBackend", "defaultAgentBackendDesktopOnly", "expandInterimDuringStream", "fontSize", "sendShortcut", "theme", "themeScheduleDarkStart", "themeScheduleLightStart", "uiFontSize"]);
 	const serialized = JSON.stringify(result.body);
 	for (const secret of ["secret-token-value", "securityConfig", "acpTools", "terminalShells", "wslEnabled", "customPiPath", "/usr/bin/claude"]) {
 		assert.equal(serialized.includes(secret), false, `projection leaked ${secret}`);
@@ -184,10 +184,16 @@ test("other paths and methods are not handled as settings writes", async () => {
 	assert.equal(wrongMethod.status, 405);
 });
 
-test("projection narrows non pi/dsh backends and defaults missing flags", () => {
+test("projection narrows non pi/dsh backends and flags them as desktop-only", () => {
 	const projected = toSafeWebSettings(hostSettings({ defaultAgentBackend: "acp", expandInterimDuringStream: undefined }));
 	assert.equal(projected.defaultAgentBackend, "pi");
+	// 兜底显示 pi 必须带「这是桌面专属后端」的标记：否则面板会把 pi 当成真实默认值。
+	assert.equal(projected.defaultAgentBackendDesktopOnly, true);
 	assert.equal(projected.expandInterimDuringStream, true);
+
+	for (const backend of ["pi", "dsh"]) {
+		assert.equal(toSafeWebSettings(hostSettings({ defaultAgentBackend: backend })).defaultAgentBackendDesktopOnly, false);
+	}
 });
 
 test("parseSafeWebSettingsPatch keeps null overrides and rejects non-object bodies", () => {

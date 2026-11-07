@@ -6609,6 +6609,7 @@ export const zhCN = {
 	"web.settingsFollowGlobal": "跟随全局字号",
 	"web.settingsSessionDefaults": "会话默认",
 	"web.settingsDefaultBackend": "新建会话后端",
+	"web.settingsDefaultBackendDesktopOnly": "桌面端当前默认后端是 Agent CLI / 生图等 Web 不支持的类型，这里只展示 pi 兜底值，避免误当成真实默认",
 	"web.settingsDefaultBackendDesc": "新建会话时预选的后端；已打开会话不受影响",
 	"web.settingsBackendPi": "Pi",
 	"web.settingsBackendDsh": "DSH",

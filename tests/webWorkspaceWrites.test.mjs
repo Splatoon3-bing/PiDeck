@@ -325,6 +325,26 @@ test("file mutations refuse to follow a project symlink that points outside the 
 	await rm(root, { recursive: true, force: true });
 });
 
+test("deleting a symlink resolves to its canonical target and refuses dangling links", async () => {
+	const root = await makeFileProject();
+	await symlink(join(root, "sub"), join(root, "link-to-sub"), "dir");
+	await symlink(join(root, "missing-target"), join(root, "dangling"));
+	const { routes, calls } = fileRoutes(root);
+
+	// 项目内 symlink：与桌面 LocalProjectFileBackend 同源——写/删操作落在 canonical 目标上，
+	// 而不是把链接本身当成可删除的普通条目（避免「删链接 vs 删目标」两种语义漂移）。
+	const linked = await call(routes, "/api/files/delete", "POST", { projectId: "p1", path: "link-to-sub" });
+	assert.equal(linked.status, 200);
+	assert.deepEqual(plain(calls.delete), [{ targetPath: join(root, "sub"), recursive: true }]);
+
+	// 悬空 symlink：realpath 失败但目录项存在，不能按「不存在的路径」放行到后续写/删。
+	const dangling = await call(routes, "/api/files/delete", "POST", { projectId: "p1", path: "dangling" });
+	assert.equal(dangling.status, 403);
+	assert.equal(dangling.body.code, "webError.fileOutsideProject");
+
+	await rm(root, { recursive: true, force: true });
+});
+
 test("oversized and malformed write bodies map to 413/400 instead of 500", async () => {
 	const { deps, calls } = stubDeps();
 	const routes = new WebWorkspaceRoutes(deps);

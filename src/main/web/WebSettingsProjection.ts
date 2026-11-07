@@ -99,7 +99,8 @@ export function parseSafeWebSettingsPatch(body: unknown): Partial<AppSettings> {
 /**
  * 设置 → Web 可读投影。只做字段裁剪与兜底，不改语义：
  * - `defaultAgentBackend` 非 pi/dsh（acp/生图/生视频）按 pi 投影：它们不是「新会话默认」的
- *   合法取值，Web 设置页也只提供 pi/dsh 两个入口。
+ *   合法取值，Web 设置页也只提供 pi/dsh 两个入口；同时用 `defaultAgentBackendDesktopOnly`
+ *   把「这只是展示兼底」告诉前端（面板禁用控件，不假装它是真实默认值）。
  * - `expandInterimDuringStream` 缺省按 true（老设置无此字段时的既有行为）。
  */
 export function toSafeWebSettings(settings: AppSettings): SafeWebSettings {
@@ -111,6 +112,7 @@ export function toSafeWebSettings(settings: AppSettings): SafeWebSettings {
 		uiFontSize: settings.uiFontSize,
 		chatFontSize: settings.chatFontSize,
 		defaultAgentBackend: settings.defaultAgentBackend === "dsh" ? "dsh" : "pi",
+		defaultAgentBackendDesktopOnly: settings.defaultAgentBackend !== "pi" && settings.defaultAgentBackend !== "dsh",
 		sendShortcut: settings.sendShortcut,
 		expandInterimDuringStream: settings.expandInterimDuringStream !== false,
 	};

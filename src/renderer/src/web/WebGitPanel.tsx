@@ -7,17 +7,15 @@
  *   前两者不可逆，后两者是联网 + 凭据动作，误触代价远高于补齐入口的收益。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Download, GitBranch, Loader2, Minus, Plus, RefreshCw } from "lucide-react";
+import { Check, Loader2, Minus, Plus } from "lucide-react";
 import type { CommitEntry, GitBranchInfo, GitResourceGroups } from "../../../shared/types";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui-shadcn/alert-dialog";
 import { Button } from "@/components/ui-shadcn/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui-shadcn/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui-shadcn/dropdown-menu";
-import { Input } from "@/components/ui-shadcn/input";
 import { Textarea } from "@/components/ui-shadcn/textarea";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { WebGitOperationError, checkoutGitBranch, commitGit, fetchGitDiff, fetchGitLog, fetchGitRemote, fetchGitStatus, stageGitFiles, unstageGitFiles } from "./webApi";
+import { WebGitBranchBar } from "./WebGitBranchBar";
 
 type GroupKey = "merge" | "index" | "workingTree" | "untracked";
 type DiffPayload = { originalContent: string; modifiedContent: string } | null;
@@ -196,42 +194,19 @@ export function WebGitPanel(props: { projectId: string; active: boolean; onChang
 
 	return (
 		<div className="flex flex-col gap-3">
-			<div className="flex min-w-0 items-center gap-1.5 text-caption text-foreground">
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<button type="button" className="flex min-w-0 items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-muted/60 disabled:opacity-60" aria-label={t("web.gitSwitchBranch")} title={t("web.gitSwitchBranch")} disabled={branchBusy || !branch}>
-							<GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-							<span className="min-w-0 max-w-40 truncate font-medium">{branch?.current ?? "—"}</span>
-							<ChevronDown className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-						</button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="start" className="max-h-80 w-56 overflow-y-auto">
-						{(branch?.branches ?? []).map((name) => (
-							<DropdownMenuItem key={name} onSelect={() => void runCheckout(name, false)}>
-								{name === branch?.current ? <Check className="size-4" aria-hidden="true" /> : <span className="size-4" aria-hidden="true" />}
-								<span className="truncate">{name}</span>
-							</DropdownMenuItem>
-						))}
-						<DropdownMenuSeparator />
-						<DropdownMenuItem
-							onSelect={() => {
-								setNewBranchName("");
-								setNewBranchOpen(true);
-							}}
-						>
-							<Plus className="size-4" aria-hidden="true" />
-							{t("web.gitNewBranch")}
-						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
-				<span className="shrink-0 text-muted-foreground">· {t("web.gitChanges", { count: totalChanges })}</span>
-				<Button type="button" variant="ghost" size="icon" className="ml-auto size-7 shrink-0 text-muted-foreground" onClick={() => void runFetch()} aria-label={t("web.gitFetch")} title={t("web.gitFetch")} disabled={loading || branchBusy}>
-					<Download className={cn("size-3.5", branchBusy && "animate-pulse")} aria-hidden="true" />
-				</Button>
-				<Button type="button" variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground" onClick={() => void load()} aria-label={t("web.gitRefresh")} title={t("web.gitRefresh")} disabled={loading}>
-					<RefreshCw className={cn("size-3.5", loading && "animate-pideck-spin")} aria-hidden="true" />
-				</Button>
-			</div>
+			<WebGitBranchBar
+				branch={branch}
+				changes={totalChanges}
+				busy={branchBusy}
+				loading={loading}
+				newBranchOpen={newBranchOpen}
+				newBranchName={newBranchName}
+				onNewBranchOpenChange={setNewBranchOpen}
+				onNewBranchNameChange={setNewBranchName}
+				onCheckout={(name, create) => void runCheckout(name, create)}
+				onFetch={() => void runFetch()}
+				onRefresh={() => void load()}
+			/>
 
 			{error || branchError ? (
 				<div className="rounded-md border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-caption text-danger" role="alert">
@@ -365,34 +340,6 @@ export function WebGitPanel(props: { projectId: string; active: boolean; onChang
 					</ul>
 				</section>
 			) : null}
-
-			<Dialog open={newBranchOpen} onOpenChange={(open) => (!open ? setNewBranchOpen(false) : undefined)}>
-				<DialogContent className="max-w-sm">
-					<DialogHeader>
-						<DialogTitle>{t("web.gitNewBranch")}</DialogTitle>
-					</DialogHeader>
-					<Input
-						value={newBranchName}
-						onChange={(event) => setNewBranchName(event.target.value)}
-						placeholder={t("web.gitBranchPlaceholder")}
-						aria-label={t("web.gitBranchName")}
-						autoFocus
-						disabled={branchBusy}
-						onKeyDown={(event) => {
-							if (event.key === "Enter" && newBranchName.trim()) void runCheckout(newBranchName.trim(), true);
-						}}
-					/>
-					<DialogFooter>
-						<Button type="button" variant="ghost" size="sm" disabled={branchBusy} onClick={() => setNewBranchOpen(false)}>
-							{t("common.cancel")}
-						</Button>
-						<Button type="button" size="sm" disabled={branchBusy || !newBranchName.trim()} onClick={() => void runCheckout(newBranchName.trim(), true)}>
-							{branchBusy ? <Loader2 className="mr-1 size-3.5 animate-pideck-spin" aria-hidden="true" /> : null}
-							{t("common.confirm")}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
 
 			<AlertDialog open={pendingCheckout != null} onOpenChange={(open) => (!open ? setPendingCheckout(null) : undefined)}>
 				<AlertDialogContent>

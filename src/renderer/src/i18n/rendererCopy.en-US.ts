@@ -6637,6 +6637,7 @@ export const enUS: Record<TranslationKey, string> = {
 	"web.settingsFollowGlobal": "Follow global size",
 	"web.settingsSessionDefaults": "Session defaults",
 	"web.settingsDefaultBackend": "New session backend",
+	"web.settingsDefaultBackendDesktopOnly": "The desktop default backend is an ACP/image/video backend this web UI cannot set; pi is shown as a fallback only",
 	"web.settingsDefaultBackendDesc": "Preselected backend for new sessions; open sessions are unaffected",
 	"web.settingsBackendPi": "Pi",
 	"web.settingsBackendDsh": "DSH",

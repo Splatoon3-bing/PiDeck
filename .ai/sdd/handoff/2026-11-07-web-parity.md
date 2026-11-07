@@ -38,26 +38,42 @@ Read the handoff file in full first. Key artifacts: .ai/sdd/specs/001-web-parity
 
 | Area | Status |
 |------|--------|
-| Phase 1A/1B（T0.1–T5） | 完成，且已过发布前评审 |
-| 评审阻断项 | 4 项全部修复（B1 白名单原型链、B2 symlink 边界、B3 审计日志、B4 巨文件） |
-| 评审 N1（body 413/400） | 已修 |
-| 文档收敛（FR-009 快捷键、design §4.3 pull/push） | 已改 |
-| 代码状态 | **未提交**（Phase 1A+1B+评审修复累积在同一工作树） |
-| NEXT | A：非阻断收尾；B：T6 终端（先安全评审） |
+| Phase 1A/1B（T0.1–T5） | 完成，已过发布前评审 |
+| 评审阻断项 B1–B4 + N1 | 已修（白名单 hasOwn / realpath 边界 / 审计日志 / body 413·400 / 巨文件回落） |
+| 评审非阻断项 | N2/N4/N5/N6/N9/N10 + 桌面广播 E2E + N3 限速 已修（见下） |
+| 未做 | N3 的 Origin 白名单（需产品决策：会与 LAN/隧道/移动端来源冲突）、`e2e/web-service.spec.ts` thinking/tool 基线红、T6–T15 |
+| 代码状态 | 第一批（Phase 1A/1B + 评审修复）已提交 `c6a395cda`；非阻断清理在**当前工作树未提交** |
+| NEXT | T6 终端（先安全评审）或继续 T7–T15 |
 
-## Remaining（按优先级）
+## 已完成（本轮非阻断清理）
 
-| # | 项 | 位置 | 修法 | 量级 |
-|---|---|---|---|---|
-| N2 | Web 改设置时桌面误弹「标题栏设置保存后需要重启 PiDeck 生效。」 | `src/renderer/src/App.tsx` bootstrapProps.onSettingsApplied（~1776） | 广播路径不弹该 toast，或按 patched keys 区分（主题/字号无需重启） | 15m |
-| N4 | 命令面板输入框 `focus-visible:ring-0` 抹掉焦点环 | `src/renderer/src/web/WebCommandPalette.tsx:100` | 保留 `focus-visible:ring-1`（NFR-004 键盘焦点可见） | 5m |
-| N5 | 390px 只测了设置面板 + 聊天页；抽屉/Git 面板无自动断言 | `e2e/web-workbench.spec.ts` | 加一条：390px 打开抽屉 → 切 Git → `scrollWidth ≤ clientWidth` | 30m |
-| N9 | symlink 自身作为删除目标时的 `recursive` 语义未钉住 | `tests/webWorkspaceWrites.test.mjs` | create symlink 指向目录后 delete `link`，断言 trash 的是链接本身 / 明确 403 | 20m |
-| N10 | `defaultAgentBackend` 投影把 acp/imagegen 一律显示为 pi | `src/main/web/WebSettingsProjection.ts` + `WebSettingsPanel.tsx` | 加只读 `defaultAgentBackendKind` 或面板提示「桌面专属后端」 | 20m |
-| N3 | 写路由无速率限制、CORS 恒 `*`、无 Origin 校验（design §6 有承诺） | `WebHttpResponders.ts` / `WebServiceManager.ts` | per-token/IP 令牌桶 + Origin 白名单（需先定策略） | 1–2h |
-| N6 | `WebGitPanel.tsx` 422 行 > 新增文件 400 行目标 | `src/renderer/src/web/WebGitPanel.tsx` | 拆出分支下拉/导航子组件 | 1h |
-| N-t | 桌面端「Web 改设置 → 桌面即时生效」无自动化用例 | `e2e/web-settings.spec.ts` | 新用例：POST /api/settings 后断言桌面窗口 `html[data-theme]` | 30m |
-| 已知红 | `e2e/web-service.spec.ts`「thinking and tool frames render as cards」 | 该 spec + `WebTimeline` 过程组 | HEAD 基线既有失败（独立 worktree 已确认）；与 Phase 1 无关，需单独排查 thinking 帧卡片渲染 | 未估 |
+| # | 项 | 落点 |
+|---|---|---|
+| N2 | Web 改设置不再误弹「需重启」toast | `src/renderer/src/App.tsx` 广播回调 |
+| N4 | 命令面板搜索框恢复焦点环 | `WebCommandPalette.tsx` `focus-visible:ring-1` |
+| N5 | 390px 抽屉 + Git 面板无横向溢出 | `e2e/web-workbench.spec.ts` 新用例 |
+| N6 | `WebGitPanel` 422 → 369 行 | 拆出 `WebGitBranchBar.tsx`（97 行） |
+| N9 | symlink 自身删除语义（项目内 → canonical；悬空 → 403） | `tests/webWorkspaceWrites.test.mjs` |
+| N10 | `defaultAgentBackendDesktopOnly`：acp/生图不再伪装成 pi | `WebSettingsProjection.ts` + 面板禁用 + i18n 三语 |
+| N-t | 桌面广播即时性 E2E（Web POST → 桌面 `data-theme`） | `e2e/web-settings.spec.ts` 新用例 |
+| N3 | 写路由限速 240/分钟/主体 → 429 + `Retry-After` | `src/main/web/WebRateLimit.ts` + `WebServiceManager` |
+
+## Remaining（下一阶段）
+
+| 项 | 说明 |
+|---|---|
+| N3 Origin 白名单 | 需先定策略（LAN/隧道/移动端来源多变）；当前 CORS 仍为 `*`，只做了写限速 |
+| `e2e/web-service.spec.ts` thinking/tool | HEAD 基线既有失败，需单独排查 thinking 帧卡片渲染，与 Phase 1 无关 |
+| T6 终端 | 默认关闭 + WebSocket + 会话归属 + 并发/缓冲上限；**先安全评审** |
+| T7–T15 | 分屏/自动化/智能体/收藏/生图/远程/通知/PWA，见 tasks.md |
+
+## 验证（非阻断清理轮）
+
+- `npm run typecheck` → 0 错
+- 针对性单测 15 个文件 → **150 pass / 0 fail**
+- `npx electron-vite build` → 通过
+- 三条 Web E2E → **11 passed / 1 skipped**
+- `npm run check:format` → 通过
 
 ## Failed approaches（避免重复）
 

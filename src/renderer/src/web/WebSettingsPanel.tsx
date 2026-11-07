@@ -158,8 +158,8 @@ export function WebSettingsPanel(props: { open: boolean; onOpenChange: (open: bo
 							</Section>
 
 							<Section title={t("web.settingsSessionDefaults")}>
-								<SettingRow label={t("web.settingsDefaultBackend")} description={t("web.settingsDefaultBackendDesc")}>
-									<Select value={settings.defaultAgentBackend} disabled={saving} onValueChange={(value) => props.onPatch({ defaultAgentBackend: value as SafeWebSettings["defaultAgentBackend"] })}>
+								<SettingRow label={t("web.settingsDefaultBackend")} description={settings.defaultAgentBackendDesktopOnly ? t("web.settingsDefaultBackendDesktopOnly") : t("web.settingsDefaultBackendDesc")}>
+									<Select value={settings.defaultAgentBackend} disabled={saving || settings.defaultAgentBackendDesktopOnly} onValueChange={(value) => props.onPatch({ defaultAgentBackend: value as SafeWebSettings["defaultAgentBackend"] })}>
 										<SelectTrigger className="h-8 w-36 text-caption" aria-label={t("web.settingsDefaultBackend")}>
 											<SelectValue />
 										</SelectTrigger>

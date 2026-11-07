@@ -1175,8 +1175,14 @@ export type SafeWebSettings = {
 	uiFontSize: AppFontSizeMode | null;
 	/** 会话正文字号覆盖；null = 跟随 fontSize */
 	chatFontSize: AppFontSizeMode | null;
-	/** 新建会话的默认后端 */
+	/** 新建会话的默认后端（Web 只能写 pi / dsh） */
 	defaultAgentBackend: WebDefaultAgentBackend;
+	/**
+	 * 桌面端把默认后端设成了 Web 不支持的档位（acp/生图/生视频）：此时
+	 * `defaultAgentBackend` 只是展示兼底值，设置面板应禁用该控件并说明原因，
+	 * 避免用户把「面板显示 pi」误当成真实默认值。
+	 */
+	defaultAgentBackendDesktopOnly: boolean;
 	/** 发送快捷键（Enter / Ctrl+Enter / Shift+Enter 发送） */
 	sendShortcut: SendShortcutMode;
 	/** 流式输出时是否自动展开中间过程 */
