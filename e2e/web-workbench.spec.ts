@@ -296,6 +296,25 @@ test("web workbench: status panel shows backend and runtime", async ({ app }) =>
 });
 
 /**
+ * T7b 分屏（只读 peek）：⋮ 菜单「分屏查看上一个标签」→ 右侧预览左邻会话 → 可关闭。
+ */
+test("web workbench: split view previews the previous tab", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	await createSession(page);
+	await createSession(page);
+
+	await page.locator(".web-header-actions button").last().click();
+	await page.getByRole("menuitem", { name: "分屏查看上一个标签" }).click();
+	const pane = page.getByTestId("web-split-pane");
+	await expect(pane).toBeVisible();
+	await expect(pane).toContainText("只读预览");
+
+	await pane.getByRole("button", { name: "关闭分屏" }).click();
+	await expect(pane).toHaveCount(0);
+});
+
+/**
  * 移动端（390px）工作区：文件面板与 Git 面板都不能产生横向溢出。
  * 设置面板的 390px 用例在 web-settings.spec.ts；这里补抽屉/分支下拉这两块最容易撑破宽度的区域。
  * 先在桌面视口建会话并打开抽屉，再缩到 390px —— 移动端侧栏是抽屉，入口本身另有覆盖（设置用例）。

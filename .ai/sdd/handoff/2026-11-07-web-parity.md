@@ -43,7 +43,7 @@ Read the handoff file in full first. Key artifacts: .ai/sdd/specs/001-web-parity
 | 评审非阻断项 | N2/N4/N5/N6/N9/N10 + 桌面广播 E2E + N3 限速 已修（见下） |
 | 未做 | N3 的 Origin 白名单（需产品决策：会与 LAN/隧道/移动端来源冲突）、`e2e/web-service.spec.ts` thinking/tool 基线红、T6–T15 |
 | 代码状态 | 第一批（Phase 1A/1B + 评审修复）已提交 `c6a395cda`；非阻断清理在**当前工作树未提交** |
-| NEXT | T6 S1–S5 已全部完成（部署前手动走查待做：隧道 Origin、手机软键盘）；下一步 T7 分屏/状态面板 → T8 自动化 |
+| NEXT | T6 完成（部署前手动走查待做）；T7a 状态面板 + T7b 只读 peek 分屏已完成；下一步 T8 自动化 → T9 智能体 → T10 收藏 |
 
 ## 已完成（本轮非阻断清理）
 

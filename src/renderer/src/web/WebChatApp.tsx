@@ -45,6 +45,9 @@ import { shouldFlushQueuedPrompt } from "./webQueueFlush";
 import { sessionUiMessagesToMarkdown } from "./webMarkdown";
 import { removeMessageOptimistic, replaceMessageTextOptimistic } from "./webMessageOptimistic";
 import { WebSessionStrips } from "./WebSessionStrips";
+import { WebSessionDialogs } from "./WebSessionDialogs";
+import { WebSplitPane } from "./WebSplitPane";
+import { useSplitSession } from "./webSplitView";
 import { hasNewerBuild, recordLoadedBuildId } from "./webBuildUpdate";
 
 /** 搜索命中落在未加载历史里时，最多向前补拉多少页（每页一个历史窗口，约 9 轮）。 */
@@ -1407,12 +1410,16 @@ export function WebChatApp() {
 
 	// 命令面板清单：装配在 webCommandList.ts，这里只把当前会话/回调接上。
 	// 快捷键（Ctrl/Cmd+Shift+P）由 WebCommandPalette 自己挂，组合根不持有键盘逻辑。
+	const { splitSession, toggleSplit, closeSplit, promoteSplit } = useSplitSession({ openTabIds, activeSessionId, sessions: state.sessions });
 	const commands = useWebCommands({
 		activeSessionId,
 		activeProjectId: activeSession?.projectId ?? state.projects[0]?.id,
 		hasActiveSession: Boolean(activeSession),
 		sessions: state.sessions,
 		canInstall,
+		canSplit: openTabIds.length >= 2,
+		splitActive: splitSession !== null,
+		onToggleSplit: toggleSplit,
 		onNewSession: (projectId) => void handleCreateSession(projectId),
 		onCloseTab: handleCloseTab,
 		onSelectSession: setActiveSessionId,
@@ -1494,6 +1501,9 @@ export function WebChatApp() {
 					onOpenAssets={() => setAssetsOpen(true)}
 					onOpenSettings={() => setSettingsOpen(true)}
 					onOpenCommands={() => setCommandOpen(true)}
+					splitActive={splitSession !== null}
+					canSplit={!mobileViewport && openTabIds.length >= 2}
+					onToggleSplit={toggleSplit}
 				/>
 				{shouldShowWebTabs(openTabIds) ? (
 					<WebSessionTabs
@@ -1592,6 +1602,17 @@ export function WebChatApp() {
 					sendShortcut={webSettings.settings?.sendShortcut ?? "enter-send"}
 				/>
 			</main>
+			{/* T7b：分屏只读预览（桌面两栏；移动端单栏，不渲染）。 */}
+			{!mobileViewport && splitSession ? (
+				<WebSplitPane
+					session={splitSession}
+					onClose={closeSplit}
+					onPromote={() => {
+						const next = promoteSplit();
+						if (next) setActiveSessionId(next.id);
+					}}
+				/>
+			) : null}
 			{/* 桌面工作区与会话并排，移动端仍是覆盖式抽屉。 */}
 			{workspaceOpen && activeSession ? (
 				<WebWorkspaceDrawer
@@ -1616,38 +1637,16 @@ export function WebChatApp() {
 			{dshToolsOpen && activeSessionId && <WebDshToolsPanel sessionId={activeSessionId} onClose={() => setDshToolsOpen(false)} />}
 			{/* 第三批：文件/diff 全屏预览（消息文件链接 + 文件变更 strip chip） */}
 			{filePreview ? <WebFilePreview target={filePreview} onClose={() => setFilePreview(null)} /> : null}
-			{/* P1：重命名会话对话框 */}
-			<Dialog open={renameDraft != null} onOpenChange={(open) => (!open ? setRenameDraft(null) : undefined)}>
-				<DialogContent className="max-w-sm">
-					<DialogHeader>
-						<DialogTitle>{t("web.renameTitle")}</DialogTitle>
-					</DialogHeader>
-					<Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} placeholder={t("web.renamePlaceholder")} onKeyDown={(event) => (event.key === "Enter" ? void confirmRename() : undefined)} />
-					<DialogFooter>
-						<Button type="button" variant="ghost" size="sm" onClick={() => setRenameDraft(null)}>
-							{t("common.cancel")}
-						</Button>
-						<Button type="button" size="sm" disabled={!renameValue.trim()} onClick={() => void confirmRename()}>
-							{t("common.confirm")}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-			{/* P1：删除会话确认（不可恢复操作走 AlertDialog 双保险） */}
-			<AlertDialog open={deleteConfirmId != null} onOpenChange={(open) => (!open ? setDeleteConfirmId(null) : undefined)}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>{t("web.deleteSessionConfirmTitle")}</AlertDialogTitle>
-						<AlertDialogDescription>{t("web.deleteSessionConfirmBody")}</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-						<AlertDialogAction className="bg-danger text-danger-foreground hover:bg-danger/90" onClick={() => void confirmDeleteSession()}>
-							{t("common.delete")}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
+			<WebSessionDialogs
+				renameDraft={renameDraft}
+				renameValue={renameValue}
+				onRenameValueChange={setRenameValue}
+				onCancelRename={() => setRenameDraft(null)}
+				onConfirmRename={() => void confirmRename()}
+				deleteConfirmId={deleteConfirmId}
+				onCancelDelete={() => setDeleteConfirmId(null)}
+				onConfirmDelete={() => void confirmDeleteSession()}
+			/>
 		</div>
 	);
 }

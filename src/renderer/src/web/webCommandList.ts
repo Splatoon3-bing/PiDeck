@@ -19,6 +19,8 @@ export type WebCommandContext = {
 	hasActiveSession: boolean;
 	sessions: ReadonlyArray<{ id: string; title: string; projectId: string; updatedAt?: number }>;
 	canInstall: boolean;
+	canSplit: boolean;
+	splitActive: boolean;
 	onNewSession: (projectId: string) => void;
 	onCloseTab: (sessionId: string) => void;
 	onSelectSession: (sessionId: string) => void;
@@ -29,6 +31,7 @@ export type WebCommandContext = {
 	onOpenSearch: () => void;
 	onRefreshModels: () => void;
 	onInstall: () => void;
+	onToggleSplit: () => void;
 };
 
 export function buildWebCommands(ctx: WebCommandContext): WebCommand[] {
@@ -62,6 +65,7 @@ export function buildWebCommands(ctx: WebCommandContext): WebCommand[] {
 	}
 	list.push({ id: "app.settings", group: "app", title: t("web.settings"), keywords: "settings 设置 外观 字号", run: () => ctx.onOpenSettings() });
 	list.push({ id: "app.theme", group: "app", title: t("web.commandThemeToggle"), keywords: "theme 主题 明暗 dark light", run: () => ctx.onToggleTheme() });
+	if (ctx.canSplit) list.push({ id: "app.split", group: "app", title: ctx.splitActive ? t("web.splitClose") : t("web.commandSplitSession"), keywords: "split 分屏 并排 peek", run: ctx.onToggleSplit });
 	list.push({ id: "app.search", group: "app", title: t("web.searchTitle"), keywords: "search 搜索", shortcut: "Ctrl+K", run: () => ctx.onOpenSearch() });
 	list.push({ id: "app.refresh-models", group: "app", title: t("web.commandRefreshModels"), keywords: "refresh models 刷新 模型", run: () => ctx.onRefreshModels() });
 	if (ctx.canInstall) list.push({ id: "app.install", group: "app", title: t("web.installApp"), keywords: "pwa install 安装 桌面", run: () => ctx.onInstall() });

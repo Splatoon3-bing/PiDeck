@@ -88,7 +88,7 @@
 | T4 | 命令面板 | P1 | 2h | T0.1 | done |
 | T5 | 移动端/安全/回归测试 | P1 | 2h | T1–T4 | done |
 | T6 | 终端（默认关闭） | P0 | 8h | 安全评审 | pending |
-| T7 | 分屏/状态面板 | P2 | 6h | T0.1 | pending |
+| T7 | 分屏/状态面板 | P2 | 6h | T0.1 | done（T7a 状态面板 + T7b 只读 peek 分屏） |
 | T8 | 自动化页 | P2 | 6h | 路由基建 | pending |
 | T9 | 智能体页 | P2 | 4h | 路由基建 | pending |
 | T10 | 收藏页 | P2 | 3h | 路由基建 | pending |
@@ -361,6 +361,15 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-07 — T7b 分屏（只读 peek）
+
+- `webSplitView.ts`：`pickSplitPartner`（左邻优先、右邻兜底、单标签不分屏）+ localStorage 持久化 + `useSplitSession`（自动收敛：会话被删/等于当前会话）。
+- `WebSplitPane.tsx`：右侧只读预览（最近 40 条消息文本 + 后端徽标 + 仅 5s 刷新、后台暂停），可「切到这一栏」或关闭。
+- 入口：⋮ 菜单「分屏查看上一个标签 / 关闭分屏」+ 命令面板同名命令；移动端不渲染（单列）。
+- 为守巨文件纪律，先把重命名/删除弹层抽到 `WebSessionDialogs.tsx`；`WebChatApp.tsx` 1643（与基线持平，未增长）。
+- 明确取舍：分屏右侧**只读**，不做第二份 `useChat`（那需要把聊天/流式/排队抽成可复用 pane，另立任务）。
+- 验证：typecheck 0 错；单测 **189** 条全绿（新增 `webSplitView` 2 条）；五条 Web E2E **16 passed / 1 skipped**；build + check:format 通过。
 
 ### 2026-11-07 — T7a 状态面板
 
