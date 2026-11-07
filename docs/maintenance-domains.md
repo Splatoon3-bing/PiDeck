@@ -390,6 +390,18 @@ description: …
 - **状态推送**：通道事件同样触发 `scheduleStatePush()`（400ms 去抖），运行时忙闲翻转即时可达；5s tick 只兜不住事件流里的目录变更。
 - 回归集：`tests/webDshChannelStream.test.mjs`（翻译器 + 路由 + 契约）、`tests/webServiceDshStream.test.mjs`（真实 WebServiceManager + 真实 HTTP：帧序列 / 保活 / 状态推送）、`tests/webEventStream.test.mjs`、`tests/webExternalReplyMerger.test.mjs`、`tests/webAcpChannelStream.test.mjs`（ACP 翻译器 + 路由 + 接线契约）、`tests/webAcpRealtimePipeline.test.mjs`（真 `AcpAgentManager` + 真传输 → SSE 帧：回合未结算前就要有 text-delta、工具卡实时、结算才有 finish）。
 
+## Web 终端链路（T6：WS + 独立 manager + 归属/上限）
+
+> 硬边界：Web 终端**不新增 pi↔PiDeck 通道**，只经主进程终端能力；浏览器不能传 cwd/命令，只能传 target 与 shell 枚举。
+
+- **开关**：`webTerminalEnabled` 默认 false，只有桌面「设置 → Web 服务」能开；不在 Web 设置白名单（`WebSettingsProjection` 的 `WRITABLE_SETTINGS`），投影只下发只读 `terminalEnabled` 供入口显隐。
+- **握手**（`src/main/web/WebTerminalRoutes.ts`）：`/api/*` 令牌链（WS 握手是 GET，允许 `?token=`）→ **Origin 同源校验**（WS 不受 CORS 预检保护，缺失/`null`/异源一律 403）→ 握手限速 10/min → 101。一条连接 = 一个 target（当前 Web UI 用 project target）。
+- **能力**：`registerWebRoutes` 创建**Web 专属** `TerminalSessionManager`（独立 tab 表），emit 只回灌给本服务的连接（不广播桌面 IPC，避免跨端串台）；复用 launcher/回放/合批/ProjectStore/runtime 校验。
+- **归属与上限**：连接只可操作自己创建的 tab；每主体 4 tab、全局 16 tab；输入 ≤4KB/帧、≤64KB/s；resize `cols ∈ [2,500]` / `rows ∈ [1,300]`；发送队列 >1MB 断连（背压）。
+- **清理**：连接关闭/服务 stop/令牌轮换 → 关闭该连接全部 PTY。断线**不自动重连**（重连=新 PTY，半路命令会丢）。
+- **反向代理**：必须透传 WebSocket Upgrade——nginx 需 `proxy_http_version 1.1`、`proxy_set_header Upgrade $http_upgrade`、`proxy_set_header Connection "upgrade"`；cloudflared 默认支持。Origin 校验要求 `Origin` 的 host 与 `Host` 一致，反代改写 Host 会 403。
+- **回归**：`tests/webTerminalHandshake.test.mjs`（握手四校验）、`tests/webSocketFrame.test.mjs`（帧边界）、`tests/webTerminalRoutes.test.mjs`（归属/上限/清理）、`tests/webSocketUpgradeRouter.test.mjs`、`e2e/web-terminal.spec.ts`（真实 PTY 回显/390px/开关关闭）。
+
 ## 会话定位轴（消息区刻度条 / outline rail）
 
 **它是什么**：会话消息区**右缘**一列 1px 横杠，一根 = 一个用户提问；悬停出预览卡，点击跳转。

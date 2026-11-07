@@ -341,7 +341,7 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 **Estimate:** 8h（S1–S5 切片）  
 **Dependencies:** 安全评审  
 **Covers:** FR-010, NFR-001, NFR-007  
-**Status:** pending（安全评审已出：[t6-terminal-security-review.md](./t6-terminal-security-review.md)，等确认 §8 后从 S1 开工）
+**Status:** in-progress（安全评审：[t6-terminal-security-review.md](./t6-terminal-security-review.md)；S1/S2/S4 已完成，S3/S5 待收）
 
 - 新增 `webTerminalEnabled`（默认 false）。
 - `WebTerminalRoutes` WebSocket：token、会话归属、输入/尺寸/关闭、并发/缓冲上限。
@@ -361,6 +361,13 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-07 — T6 S5（文档与边界收尾）
+
+- `docs/host-boundaries.md` 新增「Web 端宿主能力边界（非 pi 通道）」：投影/白名单、文件 Git realpath+回收站、终端默认关闭/Origin/归属/上限、守卫测试与「先改文档再改代码」。
+- `docs/maintenance-domains.md` 新增「Web 终端链路」：握手链、独立 manager、归属/上限/背压、清理、**反向代理 Upgrade 要求（nginx/cloudflared）与 Origin 同域约束**、回归测试清单。
+- `.status` 从 `implementation:done` 修正为 `implementation:in-progress`（T6 未完）；`INDEX.md` Next 指向 T6 S3/S5 与 T7–T15。
+- 手动手机走查与真实隧道下 Origin/Host 验证**留给部署前执行**（本机无隧道环境，不伪造结论）。
 
 ### 2026-11-07 — T6 S4（Web 终端 UI + E2E）
 
