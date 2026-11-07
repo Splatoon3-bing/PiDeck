@@ -281,6 +281,21 @@ test("web workbench: notes autosave and read back after reload", async ({ app })
 });
 
 /**
+ * T7a 状态面板：抽屉里能打开「状态」，展示后端/运行态与上下文用量区（无运行态时给占位）。
+ */
+test("web workbench: status panel shows backend and runtime", async ({ app }) => {
+	test.setTimeout(120_000);
+	const page = await openPage(app);
+	await createSession(page);
+	const drawer = await openWorkspace(page);
+	await drawer.getByRole("tab", { name: "状态" }).click();
+	const panel = page.getByTestId("web-status-panel");
+	await expect(panel).toBeVisible();
+	await expect(panel).toContainText("Pi");
+	await expect(panel).toContainText("运行状态");
+});
+
+/**
  * 移动端（390px）工作区：文件面板与 Git 面板都不能产生横向溢出。
  * 设置面板的 390px 用例在 web-settings.spec.ts；这里补抽屉/分支下拉这两块最容易撑破宽度的区域。
  * 先在桌面视口建会话并打开抽屉，再缩到 390px —— 移动端侧栏是抽屉，入口本身另有覆盖（设置用例）。

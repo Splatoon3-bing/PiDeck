@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: 97d9175ac92a1327af2bf243fe36b279f921b5f7d3ada734a383f4055f4c23b7（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 1767d9013e49c743acdb78b0188223a1674b47a3e9bf4f207a7e797cc2d15720（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -6733,6 +6733,14 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.panelGit": "Git",
 	"web.panelNotes": "草稿本",
 	"web.panelTerminal": "終端",
+	"web.panelStatus": "狀態",
+	"web.statusTitle": "會話狀態",
+	"web.statusBackend": "後端",
+	"web.statusRuntime": "執行狀態",
+	"web.statusContext": "上下文用量",
+	"web.statusContextUnavailable": "執行態暫未上報用量",
+	"web.statusNoRuntime": "本次會話尚未啟動執行態",
+	"web.backendVideogen": "生影片",
 	"web.terminalNew": "新建終端",
 	"web.terminalCloseTab": "關閉終端",
 	"web.terminalExited": "已退出",

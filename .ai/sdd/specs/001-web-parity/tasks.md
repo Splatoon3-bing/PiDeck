@@ -362,6 +362,14 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 
 ## Progress Log
 
+### 2026-11-07 — T7a 状态面板
+
+- 工作区抽屉新增「状态」面板：后端 / runtime 状态 / 上下文用量（百分比条 + tokens + 输入输出）+ 子代理与 todo（复用 `WebSessionStrips`）。
+- `useSessionActivity` 从 `WebSessionStrips` 导出复用；用量轮询 5s、`document.hidden` 跳过；无 runtime 时给占位文案。
+- E2E：`web workbench: status panel shows backend and runtime`。
+- 验证：typecheck 0 错；针对性单测 94 条全绿；五条 Web E2E **15 passed / 1 skipped**；build + check:format 通过。
+- T7b（分屏）入口与交互模型待定（见 handoff / 评审建议）。
+
 ### 2026-11-07 — T6 S3（协议边界补测）
 
 - 背压：发送队列 >1MB → 1008 断连；**补测时发现并修复递归 bug**（`fail()` 走 `sendFrame()` 时再次命中背压 → `fail` 递归爆栈），close 帧改为直写。

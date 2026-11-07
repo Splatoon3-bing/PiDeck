@@ -6,7 +6,7 @@
  * 外壳、面板切换与关闭语义，避免再长成第二个 600 行巨文件。
  */
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, GitBranch, Pencil, SquareTerminal, X } from "lucide-react";
+import { Activity, FolderOpen, GitBranch, Pencil, SquareTerminal, X } from "lucide-react";
 import { Button } from "@/components/ui-shadcn/button";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -16,17 +16,20 @@ import { WebFilesPanel } from "./WebFilesPanel";
 import { WebGitPanel } from "./WebGitPanel";
 import { WebNotesPanel } from "./WebNotesPanel";
 import { WebTerminalPanel } from "./WebTerminalPanel";
+import type { AgentBackend } from "../../../shared/types";
+import type { WebRuntime } from "./webTypes";
+import { WebStatusPanel } from "./WebStatusPanel";
 
-export type WebWorkspacePanel = "files" | "git" | "notes" | "terminal";
+export type WebWorkspacePanel = "files" | "git" | "notes" | "terminal" | "status";
 
 const PANEL_STORAGE_KEY = "pideck-web-workspace-panel";
-const PANEL_ORDER: WebWorkspacePanel[] = ["files", "git", "notes", "terminal"];
+const PANEL_ORDER: WebWorkspacePanel[] = ["files", "git", "notes", "terminal", "status"];
 
 /** 读取上次使用的面板（组合根与抽屉共用；命令面板「打开 Git 面板」也走同一存储）。 */
 export function readStoredWorkspacePanel(): WebWorkspacePanel {
 	if (typeof window === "undefined") return "files";
 	const stored = window.localStorage.getItem(PANEL_STORAGE_KEY);
-	return stored === "files" || stored === "git" || stored === "notes" || stored === "terminal" ? stored : "files";
+	return stored === "files" || stored === "git" || stored === "notes" || stored === "terminal" || stored === "status" ? stored : "files";
 }
 
 /** 记住当前面板：刷新/重开后停在同一页。 */
@@ -43,6 +46,7 @@ function panelLabel(panel: WebWorkspacePanel): string {
 	if (panel === "git") return t("web.panelGit");
 	if (panel === "notes") return t("web.panelNotes");
 	if (panel === "terminal") return t("web.panelTerminal");
+	if (panel === "status") return t("web.panelStatus");
 	return t("web.panelFiles");
 }
 
@@ -50,10 +54,11 @@ function panelIcon(panel: WebWorkspacePanel) {
 	if (panel === "git") return GitBranch;
 	if (panel === "notes") return Pencil;
 	if (panel === "terminal") return SquareTerminal;
+	if (panel === "status") return Activity;
 	return FolderOpen;
 }
 
-export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; onClose: () => void; onOpenFile: (path: string) => void; panel: WebWorkspacePanel; onSelectPanel: (panel: WebWorkspacePanel) => void; terminalEnabled: boolean }) {
+export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; onClose: () => void; onOpenFile: (path: string) => void; panel: WebWorkspacePanel; onSelectPanel: (panel: WebWorkspacePanel) => void; terminalEnabled: boolean; sessionId: string | null; runtime?: WebRuntime; backend?: AgentBackend }) {
 	const mobile = useIsMobileViewport();
 	// 终端入口只在桌面端打开开关后出现（C1：浏览器不能给自己开终端）。
 	const panelOrder = props.terminalEnabled ? PANEL_ORDER : PANEL_ORDER.filter((entry) => entry !== "terminal");
@@ -122,7 +127,7 @@ export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; on
 	);
 
 	const body =
-		panel === "terminal" ? null : panel === "git" ? (
+		panel === "terminal" || panel === "status" ? null : panel === "git" ? (
 			/* scroll-ok: nested —— Git 面板内部是变更列表 + diff 滚动，本层只做面板级滚动窗。 */
 			<div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
 				<WebGitPanel projectId={props.projectId} active={props.open} />
@@ -147,6 +152,9 @@ export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; on
 					<WebTerminalPanel projectId={props.projectId} active={panel === "terminal" && props.open} />
 				</div>
 			) : null}
+			<div className={cn("min-h-0 flex-1 overflow-y-auto px-2.5 py-2", panel !== "status" && "hidden")}>
+				<WebStatusPanel sessionId={props.sessionId} runtime={props.runtime} backend={props.backend} active={panel === "status" && props.open} />
+			</div>
 		</>
 	);
 

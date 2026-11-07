@@ -20,7 +20,7 @@ import { fetchSessionSubagents, fetchSessionTodo } from "./webApi";
 import { Collapsible, CollapsibleContent } from "@/components/ui-shadcn/collapsible";
 import { VirtualStack, VIRTUAL_STACK_MIN_ROWS } from "@/components/ui-shadcn/virtual-stack";
 
-function useSessionActivity(sessionId: string | null) {
+export function useSessionActivity(sessionId: string | null) {
 	const [subagents, setSubagents] = useState<PiSubagentEntry[]>([]);
 	const [todo, setTodo] = useState<SessionTodoSnapshot | null>(null);
 
