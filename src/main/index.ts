@@ -6820,14 +6820,12 @@ app
 				return agentManager.readSessionTodo(entry.filePath);
 			},
 		});
-		// P1-P3 工作区路由（git/files/prompts）：只读能力注入，未装配的服务自动 503
 		// Web 路由装配（工作区 + 设置）：装配细节在 web/registerWebRoutes.ts，主文件只留一行。
 		registerWebRoutes({
 			target: webServiceManager,
 			projects: projectStore,
 			git: gitService,
 			files: fileSystemService,
-			// 草稿本单例在本函数更晚的启动阶段赋值：传 provider，装配时不要固化 undefined。
 			scratchPad: () => scratchPadService,
 			security: securityStore,
 			prompts: xuePromptManager,
@@ -6839,6 +6837,8 @@ app
 				enabled: () => settingsStore.get().webTerminalEnabled === true,
 				requiresAuth: () => settingsStore.get().webServiceRequiresAuth ?? true,
 				token: () => webServiceManager.getStatus().token,
+				getAgentCwd: (agentId) => compositeAgentGateway?.list().find((candidate) => candidate.id === agentId)?.cwd ?? agentManager.getCwd(agentId),
+				validateAgentTarget: (target) => sessionRuntimeCoordinator.validateTarget(target).ok,
 			},
 		});
 		// C12：退出清理登记（before-quit 统一 runAll）

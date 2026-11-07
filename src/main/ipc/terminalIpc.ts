@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { ipcChannels } from "../../shared/ipc";
-import type { SessionCommandError, TerminalAgentTarget, TerminalShell, TerminalTarget } from "../../shared/types";
+import type { SessionCommandError, TerminalTarget } from "../../shared/types";
+import { parseTerminalShell, parseTerminalTarget } from "../terminal/terminalTarget";
 import type { AppLogger } from "../logging/AppLogger";
 import type { ProjectStore } from "../projects/ProjectStore";
 import { listSystemFontFamilies } from "../fonts/SystemFonts";
@@ -9,52 +10,6 @@ import type { RemoteTerminalSessionManager } from "../terminal/RemoteTerminalSes
 import { isRemoteProject } from "../../shared/projectLocation";
 import type { WebContents } from "electron";
 import type { TerminalSessionManager } from "../terminal/TerminalSessionManager";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-	return Object.keys(value).every((key) => keys.includes(key));
-}
-
-function parseTerminalTarget(value: unknown): TerminalTarget {
-	if (!isRecord(value) || typeof value.kind !== "string") throw new Error("INVALID_TERMINAL_TARGET");
-	if (value.kind === "project") {
-		if (!hasOnlyKeys(value, ["kind", "projectId"]) || typeof value.projectId !== "string" || !value.projectId.trim() || value.projectId.length > 256) {
-			throw new Error("INVALID_TERMINAL_TARGET");
-		}
-		return { kind: "project", projectId: value.projectId };
-	}
-	if (value.kind === "agent") {
-		const { sessionId, agentId, runtimeGeneration } = value;
-		if (
-			!hasOnlyKeys(value, ["kind", "sessionId", "agentId", "runtimeGeneration"]) ||
-			typeof sessionId !== "string" ||
-			!sessionId.trim() ||
-			sessionId.length > 256 ||
-			typeof agentId !== "string" ||
-			!agentId.trim() ||
-			agentId.length > 256 ||
-			typeof runtimeGeneration !== "number" ||
-			!Number.isSafeInteger(runtimeGeneration) ||
-			runtimeGeneration < 1
-		) {
-			throw new Error("INVALID_TERMINAL_TARGET");
-		}
-		const target: TerminalAgentTarget = { kind: "agent", sessionId, agentId, runtimeGeneration };
-		return target;
-	}
-	throw new Error("INVALID_TERMINAL_TARGET");
-}
-
-function parseTerminalShell(value: unknown): TerminalShell | undefined {
-	if (value === undefined) return undefined;
-	if (value === "pwsh" || value === "powershell" || value === "cmd" || value === "zsh" || value === "bash" || value === "fish" || value === "sh" || value === "git-bash" || value === "wsl") {
-		return value;
-	}
-	throw new Error("INVALID_TERMINAL_SHELL");
-}
 
 function parseTerminalTabId(value: unknown): string {
 	if (typeof value !== "string" || !value.trim() || value.length > 128) throw new Error("INVALID_TERMINAL_TAB_ID");

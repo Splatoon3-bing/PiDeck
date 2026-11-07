@@ -1,6 +1,6 @@
 # T6 Web 终端 — 安全评审（实施前）
 
-> Status: **S1 已实施（2026-11-07）**：开关 + 握手四校验 + 帧骨架 + 清理，**未开 PTY**；S2 起接真实终端。
+> Status: **S1/S2 已实施（2026-11-07）**：开关 + 握手四校验 + 帧协议 + 独立 manager 接 PTY（归属/上限/背压/清理）；剩 S3–S5。
 > Scope: `tasks.md` T6 / `design.md` §4.6 / `requirements.md` FR-010、NFR-001、NFR-007
 > Last Updated: 2026-11-07
 
@@ -123,4 +123,4 @@ WebServiceManager.handleUpgrade
 - 不开放任意 shell 路径、不开放 `cwd` 入参、不开放命令白名单之外的执行入口。
 - 不做「Web 端远程/WSL 终端」（Phase 4 的 locator 投影问题）。
 - 不复用桌面 IPC `terminalData` 广播、不新增 pi↔PiDeck 通道。
-- S1 已按本评审落地（`WebSocketHandshake` / `WebSocketFrame` / `WebTerminalRoutes` / `WebSocketUpgradeRouter`）；S2 起注入 `createTerminal` 再接 PTY。
+- S1/S2 已按本评审落地：`WebSocketHandshake` / `WebSocketFrame` / `WebTerminalRoutes` / `WebSocketUpgradeRouter` + `terminalTarget.ts`（与桌面共用 parser）；Web 专属 `TerminalSessionManager` 实例接 PTY。

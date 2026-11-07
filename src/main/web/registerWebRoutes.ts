@@ -11,7 +11,10 @@
  */
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { AppSettings, Project } from "../../shared/types";
+import type { AppSettings, Project, TerminalAgentTarget, TerminalTarget } from "../../shared/types";
+import { ipcChannels } from "../../shared/ipc";
+import { TerminalSessionManager } from "../terminal/TerminalSessionManager";
+import { parseTerminalTarget } from "../terminal/terminalTarget";
 import { createProjectFileReadBoundary, resolveProjectFileWritePath } from "../files/projectFileAccess";
 import { writeTextFileGuarded } from "../files/textFileWrite";
 import type { FileSystemService } from "../fs/FileSystemService";
@@ -30,7 +33,7 @@ import { createWebSettingsRoutes } from "./WebSettingsRoutes";
 export type WebRoutesRegistration = {
 	/** Web 服务实例：写三个注入点（workspaceRoutes / settingsRoutes / terminalRoutes）。 */
 	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes" | "terminalRoutes">;
-	projects: { list: () => Project[] };
+	projects: { list: () => Project[]; get: (projectId: string) => Project | undefined };
 	git: GitService;
 	files: FileSystemService;
 	/**
@@ -50,7 +53,15 @@ export type WebRoutesRegistration = {
 	 * Web 终端（S1 骨架）：开关/令牌一律用 getter，改设置不需要重启服务。
 	 * S1 不注入 `createTerminal`，create 帧回 webError.terminalNotReady（不开 PTY）。
 	 */
-	terminal: { enabled: () => boolean; requiresAuth: () => boolean; token: () => string };
+	terminal: {
+		enabled: () => boolean;
+		requiresAuth: () => boolean;
+		token: () => string;
+		/** agent 目标 → cwd（与桌面终端同一合成网关语义）。 */
+		getAgentCwd: (agentId: string) => string;
+		/** agent 目标归属校验（复用 SessionRuntimeCoordinator，防打到旧 runtime）。 */
+		validateAgentTarget: (target: TerminalAgentTarget) => boolean;
+	};
 };
 
 export function registerWebRoutes(deps: WebRoutesRegistration): void {
@@ -143,10 +154,41 @@ export function registerWebRoutes(deps: WebRoutesRegistration): void {
 	});
 	// 设置路由：白名单投影/写入 + 明暗重放 + 窗口广播，装配细节在 createWebSettingsRoutes。
 	deps.target.settingsRoutes = createWebSettingsRoutes({ settings: deps.settings, onThemeApplied: deps.onThemeApplied });
-	// Web 终端（S1）：只有握手四校验 + 帧协议骨架；PTY 在 S2 注入 createTerminal。
-	deps.target.terminalRoutes = new WebTerminalRoutes({
+	// Web 终端：独立 TerminalSessionManager 实例（C14）——不共享桌面 tab 表，emit 只回灌给本服务的连接，
+	// 避免「桌面终端输出广播到 Web」或跨端串台。复用 launcher/回放/合批与 ProjectStore/runtime 校验。
+	let terminalRoutes: WebTerminalRoutes | null = null;
+	const terminalManager = new TerminalSessionManager(
+		deps.terminal.getAgentCwd,
+		(channel, payload) => {
+			if (channel === ipcChannels.terminalData) terminalRoutes?.dispatchTerminalEvent("data", payload);
+			else if (channel === ipcChannels.terminalExit) terminalRoutes?.dispatchTerminalEvent("exit", payload);
+		},
+		{ get: deps.projects.get },
+		// WSL 终端的身份只来自项目档案（与桌面一致，不读旧全局开关）。
+		() => ({}),
+	);
+	const resolveTarget = (raw: unknown): TerminalTarget => {
+		const target = parseTerminalTarget(raw);
+		if (target.kind === "project") {
+			const project = deps.projects.get(target.projectId);
+			if (!project) throw new Error("PROJECT_NOT_FOUND");
+			if (project.kind === "chat") throw new Error("TERMINAL_PROJECT_UNSUPPORTED");
+			return target;
+		}
+		if (!deps.terminal.validateAgentTarget(target)) throw new Error("SESSION_RUNTIME_CHANGED");
+		return target;
+	};
+	terminalRoutes = new WebTerminalRoutes({
 		enabled: deps.terminal.enabled,
 		requiresAuth: deps.terminal.requiresAuth,
 		token: deps.terminal.token,
+		resolveTarget,
+		terminal: {
+			create: (input) => terminalManager.create(input.target, input.shell),
+			input: (tabId, data) => terminalManager.input(tabId, data),
+			resize: (tabId, cols, rows) => terminalManager.resize(tabId, cols, rows),
+			close: (tabId) => terminalManager.close(tabId),
+		},
 	});
+	deps.target.terminalRoutes = terminalRoutes;
 }

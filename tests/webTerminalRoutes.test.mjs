@@ -64,7 +64,20 @@ function makeRequest({ url = `/api/terminal?token=${TOKEN}`, origin = `http://${
 function maskedTextFrame(message) {
 	const data = Buffer.from(JSON.stringify(message), "utf8");
 	const mask = Buffer.from([9, 8, 7, 6]);
-	const header = Buffer.from([0x81, 0x80 | data.length]);
+	let header;
+	if (data.length < 126) {
+		header = Buffer.from([0x81, 0x80 | data.length]);
+	} else if (data.length < 65_536) {
+		header = Buffer.alloc(4);
+		header[0] = 0x81;
+		header[1] = 0x80 | 126;
+		header.writeUInt16BE(data.length, 2);
+	} else {
+		header = Buffer.alloc(10);
+		header[0] = 0x81;
+		header[1] = 0x80 | 127;
+		header.writeBigUInt64BE(BigInt(data.length), 2);
+	}
 	const masked = Buffer.from(data);
 	for (let index = 0; index < masked.length; index += 1) masked[index] ^= mask[index % 4];
 	return Buffer.concat([header, mask, masked]);
@@ -119,14 +132,12 @@ test("校验通过：101 + 正确 accept key，连接登记 1 个", () => {
 	assert.ok(logs.some((entry) => entry.message === "connection.open"));
 });
 
-test("S1 骨架：create/input 帧回 terminalNotReady（不 spawn PTY）", () => {
+test("未注入终端能力时：create 帧回 terminalNotReady（不 spawn PTY）", () => {
 	const { routes: instance } = routes();
 	const socket = makeSocket();
 	instance.handleUpgrade(makeRequest(), socket);
 	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
-	socket.emitData(maskedTextFrame({ type: "input", data: "ls\n" }));
-	const text = socket.text();
-	assert.equal((text.match(/webError\.terminalNotReady/g) ?? []).length, 2);
+	assert.match(socket.text(), /webError\.terminalNotReady/);
 });
 
 test("未知帧类型回 invalidFrame；非 JSON 帧直接 close 1007", () => {
@@ -167,4 +178,146 @@ test("握手限速：同一主体第 11 次握手 429", () => {
 	instance.handleUpgrade(makeRequest(), blocked);
 	assert.match(blocked.text(), /^HTTP\/1\.1 429 /);
 	assert.match(blocked.text(), /webError\.rateLimited/);
+});
+
+/* ── S2：接真实终端能力（假 manager），覆盖归属/上限/输入尺寸/resize/清理 ── */
+
+function fakeTerminal() {
+	const calls = { create: [], input: [], resize: [], close: [] };
+	let sequence = 0;
+	return {
+		calls,
+		create: (input) => {
+			calls.create.push(input);
+			sequence += 1;
+			return { id: `tab-${sequence}`, title: `t${sequence}`, shell: input.shell ?? "bash", createdAt: 1, buffer: "" };
+		},
+		input: (id, data) => calls.input.push({ id, data }),
+		resize: (id, cols, rows) => calls.resize.push({ id, cols, rows }),
+		close: (id) => calls.close.push(id),
+	};
+}
+
+function openWithTerminal(overrides = {}) {
+	const terminal = fakeTerminal();
+	const { routes: instance, logs } = routes({ terminal, resolveTarget: (raw) => raw, ...overrides });
+	const socket = makeSocket();
+	instance.handleUpgrade(makeRequest(), socket);
+	return { terminal, routes: instance, socket, logs };
+}
+
+test("S2 create：解析 target + 回 created 帧 + 记录归属", () => {
+	const { terminal, socket } = openWithTerminal();
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" }, shell: "bash" }));
+	assert.equal(terminal.calls.create.length, 1);
+	assert.deepEqual(JSON.parse(JSON.stringify(terminal.calls.create[0])), { target: { kind: "project", projectId: "p1" }, shell: "bash" });
+	assert.match(socket.text(), /"type":"created"/);
+	assert.match(socket.text(), /"id":"tab-1"/);
+});
+
+test("S2 归属：连接只能操作自己创建的 tab（跨连接 tabId 被拒）", () => {
+	const owner = openWithTerminal();
+	owner.socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+
+	// 另一个连接（不同 token → 不同配额 key）尝试写 owner 的 tab
+	const intruder = routes({ terminal: fakeTerminal(), resolveTarget: (raw) => raw }).routes;
+	const intruderSocket = makeSocket();
+	intruder.handleUpgrade(makeRequest({ url: `/api/terminal?token=${TOKEN}` }), intruderSocket);
+	intruderSocket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "rm -rf /" }));
+	assert.match(intruderSocket.text(), /webError\.terminalTabNotFound/);
+});
+
+test("S2 input：归属内转发；超 4KB 拒绝；空内容拒绝", () => {
+	const { terminal, socket } = openWithTerminal();
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "ls\n" }));
+	assert.deepEqual(JSON.parse(JSON.stringify(terminal.calls.input)), [{ id: "tab-1", data: "ls\n" }]);
+
+	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "x".repeat(4097) }));
+	assert.match(socket.text(), /webError\.terminalInputTooLarge/);
+
+	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "" }));
+	assert.match(socket.text(), /webError\.invalidFrame/);
+});
+
+test("S2 resize：合法转发；越界/非整数拒绝", () => {
+	const { terminal, socket } = openWithTerminal();
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	socket.emitData(maskedTextFrame({ type: "resize", tabId: "tab-1", cols: 120, rows: 40 }));
+	assert.deepEqual(JSON.parse(JSON.stringify(terminal.calls.resize)), [{ id: "tab-1", cols: 120, rows: 40 }]);
+
+	for (const [cols, rows] of [
+		[1, 40],
+		[120, 0],
+		[1e9, 40],
+		[120.5, 40],
+	]) {
+		const { socket: s2 } = openWithTerminal();
+		s2.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+		s2.emitData(maskedTextFrame({ type: "resize", tabId: "tab-1", cols, rows }));
+		assert.match(s2.text(), /webError\.invalidResize/, `cols=${cols} rows=${rows}`);
+	}
+});
+
+test("S2 close 帧：关闭 PTY 并撤销归属（后续 input 被拒）", () => {
+	const { terminal, socket } = openWithTerminal();
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	socket.emitData(maskedTextFrame({ type: "close", tabId: "tab-1" }));
+	assert.deepEqual(JSON.parse(JSON.stringify(terminal.calls.close)), ["tab-1"]);
+	assert.match(socket.text(), /"type":"closed"/);
+	socket.emitData(maskedTextFrame({ type: "input", tabId: "tab-1", data: "x" }));
+	assert.match(socket.text(), /webError\.terminalTabNotFound/);
+});
+
+test("S2 连接关闭：清理该连接全部 tab（不泄漏 PTY）", () => {
+	const { terminal, socket, routes: instance } = openWithTerminal();
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	assert.equal(instance.openTabCount, 2);
+	instance.closeAll();
+	assert.equal(instance.openTabCount, 0);
+	assert.deepEqual(JSON.parse(JSON.stringify(terminal.calls.close)).sort(), ["tab-1", "tab-2"]);
+});
+
+test("S2 并发上限：同一主体第 5 个 tab 被拒", () => {
+	const { socket } = openWithTerminal();
+	for (let index = 0; index < 4; index += 1) {
+		socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	}
+	assert.match(socket.text(), /"type":"created"/);
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+	assert.match(socket.text(), /webError\.terminalLimit/);
+});
+
+test("S2 target 拒绝：未知项目 → projectNotFound；伪造 cwd 字段 → invalidTarget", () => {
+	const resolveTarget = (raw) => {
+		if (typeof raw === "object" && raw !== null && "cwd" in raw) throw new Error("INVALID_TERMINAL_TARGET");
+		if (raw?.projectId === "missing") throw new Error("PROJECT_NOT_FOUND");
+		return raw;
+	};
+	const { routes: instance } = routes({ terminal: fakeTerminal(), resolveTarget });
+	const socket = makeSocket();
+	instance.handleUpgrade(makeRequest(), socket);
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "missing" } }));
+	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1", cwd: "/etc" } }));
+	assert.match(socket.text(), /webError\.projectNotFound/);
+	assert.match(socket.text(), /webError\.invalidTarget/);
+});
+
+test("S2 输出路由：只有 tab 所属连接收到 data/exit 帧", () => {
+	const owner = openWithTerminal();
+	owner.socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+
+	const other = openWithTerminal();
+	other.socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));
+
+	owner.routes.dispatchTerminalEvent("data", { tabId: "tab-1", data: "hello" });
+	owner.routes.dispatchTerminalEvent("exit", { tabId: "tab-1", exitCode: 0 });
+	owner.routes.dispatchTerminalEvent("data", { tabId: "tab-2", data: "should-not-leak" });
+
+	const ownerText = owner.socket.text();
+	assert.match(ownerText, /"data":"hello"/);
+	assert.match(ownerText, /"type":"exit"/);
+	assert.equal(ownerText.includes("should-not-leak"), false);
+	assert.equal(other.socket.text().includes("hello"), false);
 });

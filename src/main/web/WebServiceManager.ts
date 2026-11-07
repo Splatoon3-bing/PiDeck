@@ -335,7 +335,10 @@ export class WebServiceManager {
 
 	/** 设置页手动修改令牌 / 过期策略（web:set-token IPC）：立即热生效 + 持久化，不重启服务。 */
 	setTokenPolicy(input: { token?: string; expiresIn?: number }): void {
+		const previous = this.tokenAuth.token;
 		this.tokenAuth.setPolicy(input);
+		// 令牌实际变化时，已建立的 WebSocket 连接（WS 不能重发认证头）必须断开，不能继续用旧身份。
+		if (this.tokenAuth.token !== previous) this.terminalRoutes?.closeAll("token rotated");
 	}
 
 	/** expiresIn > 0 时的绝对过期时刻；0/未设置 → null（永不过期）。 */
@@ -346,6 +349,7 @@ export class WebServiceManager {
 	/** 轮换访问令牌（设置页「重新生成令牌」）：立即换新并广播状态。 */
 	rotateToken(): void {
 		this.tokenAuth.rotate();
+		this.terminalRoutes?.closeAll("token rotated");
 	}
 	/** 渲染层展示二维码/令牌用；未运行时返回空形状（running=false） */
 	getStatus(): WebServiceStatusInfo {

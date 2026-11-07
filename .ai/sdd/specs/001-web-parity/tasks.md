@@ -362,6 +362,22 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 
 ## Progress Log
 
+### 2026-11-07 — T6 S2（接 PTY：create/input/resize/close + 归属）
+
+- 新增 `src/main/terminal/terminalTarget.ts`：`parseTerminalTarget` / `parseTerminalShell` 从 terminalIpc 抽出，桌面 IPC 与 Web 终端共用同一套 target/shell 校验（C4，避免两套漂移）。
+- `WebTerminalRoutes` S2：
+  - `create`：`resolveTarget`（注入，复用 parser + ProjectStore/runtime 校验）→ 独立 manager 创建 PTY → 回 `created`（title/shell/buffer）；
+  - `input`：只转发到本连接创建的 tab（C5），单帧 ≤4KB、单连接 ≤64KB/s（C6）；
+  - `resize`：cols ∈ [2,500]、rows ∈ [1,300] 安全整数（C7）；
+  - `close`：只关本连接的 tab 并撤销归属；
+  - 并发：每主体 4 tab / 全局 16 tab（C9）；背压 >1MB 断开（C8）；
+  - 输出：`dispatchTerminalEvent` 按 tab 归属只发给创建它的连接，不广播（C14）。
+- `registerWebRoutes`：创建 **Web 专属** `TerminalSessionManager`（独立 tab 表，emit 回灌到 routes），复用 launcher/回放/合批/ProjectStore/runtime 校验；agent cwd 走合成网关（与桌面同语义）。
+- 令牌变化（手动改令牌/轮换）→ `closeAll("token rotated")`，旧 WS 连接立即失效（C2/C10）。
+- 验证：`npm run typecheck` 0 错；单测 **184** 条全绿（新增 9 条 S2：归属/上限/输入尺寸/resize/清理/输出路由/target 拒绝）；`npx electron-vite build` 通过；`check:format` 通过。
+- 巨文件：`main/index.ts` 8021（≤ S1 提交时 8021，未增长）。
+- 明确未做：S3 背压细化/更多协议边界、S4 Web UI（xterm/移动端/E2E）、S5 文档与部署走查。
+
 ### 2026-11-07 — T6 S1（Web 终端骨架，不开 PTY）
 
 - 安全评审：`t6-terminal-security-review.md`（C1–C20、威胁模型、验收、S1–S5 切片）；门禁值确认：每 token 4 / 全局 16、断线不自动重连。
