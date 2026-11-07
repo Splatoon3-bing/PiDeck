@@ -315,6 +315,30 @@ test("web workbench: split view previews the previous tab", async ({ app }) => {
 });
 
 /**
+ * T8 自动化面板：新建 manual 任务 → 列表出现 → 删除确认后消失（不真正运行，避免 E2E 依赖 mock agent 回合）。
+ */
+test("web workbench: automation panel creates and deletes a manual task", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	await createSession(page);
+	const drawer = await openWorkspace(page);
+	await drawer.getByRole("tab", { name: "自动化" }).click();
+	const panel = page.getByTestId("web-automation-panel");
+	await expect(panel).toBeVisible();
+
+	await panel.getByRole("button", { name: "新建任务" }).click();
+	const dialog = page.getByRole("dialog");
+	await dialog.locator("#automation-name").fill("e2e-task");
+	await dialog.locator("#automation-prompt").fill("say hi");
+	await dialog.getByRole("button", { name: "保存" }).click();
+	await expect(panel.getByTestId("web-automation-list")).toContainText("e2e-task", { timeout: 20_000 });
+
+	await panel.getByRole("button", { name: "删除" }).first().click();
+	await page.getByRole("alertdialog").getByRole("button", { name: "删除" }).click();
+	await expect(panel.getByTestId("web-automation-list")).not.toContainText("e2e-task", { timeout: 20_000 });
+});
+
+/**
  * 移动端（390px）工作区：文件面板与 Git 面板都不能产生横向溢出。
  * 设置面板的 390px 用例在 web-settings.spec.ts；这里补抽屉/分支下拉这两块最容易撑破宽度的区域。
  * 先在桌面视口建会话并打开抽屉，再缩到 390px —— 移动端侧栏是抽屉，入口本身另有覆盖（设置用例）。

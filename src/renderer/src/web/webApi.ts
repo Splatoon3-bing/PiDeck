@@ -13,6 +13,7 @@ import type { CommitEntry, GitBranchInfo, GitResourceGroups, ImageContent, PiExt
 import type { AgentUiResponse } from "../../../shared/types";
 import type { WebSecurityState } from "../../../shared/types";
 import type { SafeWebSettings, WebWritableSettings } from "../../../shared/types";
+import type { AutomationCronPreview, CreateAutomationTaskInput, UpdateAutomationTaskInput, WebAutomationRun, WebAutomationSnapshot, WebAutomationTask } from "../../../shared/types";
 import type { WebContextUsage, WebFileNodeLite, WebState } from "./webTypes";
 
 // Web 服务令牌：与 browserApi 同型（同一 localStorage key），从二维码/分享链接的 ?token= 读取一次并持久化。
@@ -907,4 +908,67 @@ export async function toggleWebExtension(source: string, enabled: boolean, scope
 		body: JSON.stringify({ source, enabled, scope }),
 	});
 	if (!res.ok) throw new Error(`extension toggle ${res.status}`);
+}
+
+// ── 自动化（T8）：白名单投影 + 显式错误码（busy/notFound 由 UI 决定提示） ──
+
+export class WebAutomationError extends Error {
+	readonly code: string;
+	readonly field?: string;
+	constructor(code: string, message: string, field?: string) {
+		super(message);
+		this.name = "WebAutomationError";
+		this.code = code;
+		this.field = field;
+	}
+}
+
+async function automationRequest<T>(path: string, init?: RequestInit): Promise<T> {
+	const res = await apiFetch(path, init);
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { code?: string; message?: string; field?: string } | null;
+		throw new WebAutomationError(payload?.code ?? `automation ${res.status}`, payload?.message ?? `automation ${res.status}`, payload?.field);
+	}
+	return (await res.json()) as T;
+}
+
+function automationPost<T>(path: string, body: unknown): Promise<T> {
+	return automationRequest<T>(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
+export function fetchAutomationSnapshot(taskId?: string): Promise<WebAutomationSnapshot> {
+	const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+	return automationRequest<WebAutomationSnapshot>(`/api/automations${query}`);
+}
+
+export async function createWebAutomation(input: CreateAutomationTaskInput): Promise<WebAutomationTask> {
+	const payload = await automationPost<{ task: WebAutomationTask }>("/api/automations/create", input);
+	return payload.task;
+}
+
+export async function updateWebAutomation(taskId: string, patch: UpdateAutomationTaskInput): Promise<WebAutomationTask> {
+	const payload = await automationPost<{ task: WebAutomationTask }>("/api/automations/update", { taskId, patch });
+	return payload.task;
+}
+
+export async function deleteWebAutomation(taskId: string): Promise<void> {
+	await automationPost<{ ok: boolean }>("/api/automations/delete", { taskId });
+}
+
+export async function runWebAutomation(taskId: string): Promise<WebAutomationRun> {
+	const payload = await automationPost<{ run: WebAutomationRun }>("/api/automations/run", { taskId });
+	return payload.run;
+}
+
+export async function abortWebAutomation(runId: string): Promise<void> {
+	await automationPost<{ ok: boolean }>("/api/automations/abort", { runId });
+}
+
+export async function clearWebAutomationRuns(): Promise<number> {
+	const payload = await automationPost<{ removed: number }>("/api/automations/clear-runs", {});
+	return payload.removed;
+}
+
+export function previewWebAutomationCron(expression: string): Promise<AutomationCronPreview> {
+	return automationRequest<AutomationCronPreview>(`/api/automations/preview-cron?expression=${encodeURIComponent(expression)}`);
 }

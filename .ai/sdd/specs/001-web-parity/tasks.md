@@ -89,7 +89,7 @@
 | T5 | 移动端/安全/回归测试 | P1 | 2h | T1–T4 | done |
 | T6 | 终端（默认关闭） | P0 | 8h | 安全评审 | pending |
 | T7 | 分屏/状态面板 | P2 | 6h | T0.1 | done（T7a 状态面板 + T7b 只读 peek 分屏） |
-| T8 | 自动化页 | P2 | 6h | 路由基建 | pending |
+| T8 | 自动化页 | P2 | 6h | 路由基建 | done（S1 数据面 + S2 UI + S3 E2E） |
 | T9 | 智能体页 | P2 | 4h | 路由基建 | pending |
 | T10 | 收藏页 | P2 | 3h | 路由基建 | pending |
 | T11 | 生图/生视频 | P3 | 6h | 后端链路 | pending |
@@ -361,6 +361,16 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-07 — T8 自动化（数据面 + UI + E2E）
+
+- 设计：`t8-automation-web-slice.md`（路由/投影/白名单/安全清单/切片）。
+- S1：`WebAutomationProjection`（任务/运行投影：prompt 20KB 截断、error 2KB、events 50×512B、去 agentId/runtimeGeneration）+ `WebAutomationRoutes`（GET/create/update/delete/run/abort/clear-runs/preview-cron；项目归属、白名单、busy 409、审计 `web-automation`）；`WebServiceManager` + `registerWebRoutes` 注入（store/coordinator 用 provider 延迟读取）。
+- S2：抽屉「自动化」面板（任务列表/启停/运行确认/中止/编辑 Dialog/cron 预览/最近 20 条历史/清理终态）；i18n 三语。
+- S3：E2E 新建 manual 任务 → 列表 → 删除确认（不真正运行，避免 E2E 依赖 mock agent 回合）。
+- 修复两处问题：① `projects.get` 未绑定（与终端 manager 同源坑，运行期 `this` 丢失）；② 更新解析误用创建语义（patch 字段必填），拆成 `parsePatch`。
+- 验证：typecheck 0 错；针对性单测 **197** 条全绿（新增 8 条自动化）；五条 Web E2E **17 passed / 1 skipped**；build + check:format 通过。
+- 巨文件：`WebChatApp.tsx` 1643、`main/index.ts` 8021（未增长）；新增面板 376 行。
 
 ### 2026-11-07 — T7b 分屏（只读 peek）
 

@@ -151,3 +151,22 @@ export type AutomationChangedEvent = {
 export function isAutomationRunTerminal(status: AutomationRunStatus): boolean {
 	return status !== "queued" && status !== "starting" && status !== "running";
 }
+
+/**
+ * Web 端自动化投影（`WebAutomationProjection` 生产、浏览器消费）。
+ *
+ * 与桌面形状的差异都是「少给」而不是「改语义」：
+ * - task.prompt 过长时截断并置 promptTruncated（列表不需要整段正文）；
+ * - run 去掉 agentId/runtimeGeneration（内部身份，对用户无价值），
+ *   error 截断 2KB、events 最多 50 条且每条 message 截断 512B。
+ */
+export type WebAutomationTask = AutomationTaskSummary & { promptTruncated?: boolean };
+export type WebAutomationRun = Omit<AutomationRun, "agentId" | "runtimeGeneration" | "events"> & {
+	events: Array<{ id: string; type: AutomationRunEventType; at: number; message?: string }>;
+};
+export type WebAutomationSnapshot = {
+	revision: number;
+	settings: AutomationSettings;
+	tasks: WebAutomationTask[];
+	runs: WebAutomationRun[];
+};

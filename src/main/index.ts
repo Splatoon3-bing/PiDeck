@@ -6820,7 +6820,6 @@ app
 				return agentManager.readSessionTodo(entry.filePath);
 			},
 		});
-		// Web 路由装配（工作区 + 设置）：装配细节在 web/registerWebRoutes.ts，主文件只留一行。
 		registerWebRoutes({
 			target: webServiceManager,
 			projects: projectStore,
@@ -6833,6 +6832,7 @@ app
 			extensions: extensionManager,
 			settings: settingsStore,
 			onThemeApplied: applyNativeThemeSource,
+			automation: { store: () => automationStore, runs: () => automationRunCoordinator },
 			terminal: {
 				enabled: () => settingsStore.get().webTerminalEnabled === true,
 				requiresAuth: () => settingsStore.get().webServiceRequiresAuth ?? true,

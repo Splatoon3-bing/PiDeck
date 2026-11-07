@@ -243,6 +243,8 @@ export class WebServiceManager {
 	settingsRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** Web 终端路由（upgrade 分发）；未装配或开关关闭时握手被拒（403）。 */
 	terminalRoutes: WebTerminalRoutes | null = null;
+	/** 自动化路由（T8）；未装配时 /api/automations 走 404。 */
+	automationRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
@@ -527,6 +529,7 @@ export class WebServiceManager {
 		if (url.pathname.startsWith("/api/")) {
 			// 设置（白名单投影/写入）与工作区路由（git/files/prompts）：独立模块承载，返回 false 表示未命中
 			if (this.settingsRoutes && (await this.settingsRoutes.handle(url, request, response))) return;
+			if (this.automationRoutes && (await this.automationRoutes.handle(url, request, response))) return;
 			if (this.workspaceRoutes && (await this.workspaceRoutes.handle(url, request, response))) return;
 			this.sendError(response, 404, "webError.apiNotFound", "API not found");
 			return;
