@@ -45,8 +45,8 @@ Read the handoff file in full first. Key artifacts: .ai/sdd/specs/001-web-parity
 | T13 通知/公告/反馈 | **本轮完成（未提交）**：`WebNoticeRoutes` + `WebNoticeCenter`；反馈复用建会话 + 预填 |
 | T15 PWA/离线 | **本轮完成（未提交）**：三态连接（离线 vs 连接中）；SW 策略沿用既有 |
 | 已提交 | `eb112ccae`（T9/T10/T11/T13/T15 + T12 v1 + T14 评审） |
-| 未做 | T14 宿主插件只读的**实现**（评审结论：v1 不开放，切片已记入评审 §3）；T6 部署前手动走查 |
-| 全量红单 | **已确认无新增**：15724 tests → 15441 pass / **156 fail** / 101 cancelled，与基线 156 一致；新增 22 条测试全绿；`webLayout` 5 红用基线 worktree 对照同为既有 |
+| 未做 | T14 只读 **UI 入口**（API 与投影已完成，见 `02875729d`）；上述 78 条红单的逐组根因修复；T6 部署前手动走查 |
+| 全量红单 | 已从 **156 → 78 fail**（16301 pass / 16482 tests）：长尾根因是本机 Node 无 TS 剥离，已加 `tests/helpers/tsEsmLoader.mjs` 接入 npm test；cua 动态 `?t=` import 也已覆盖。**残量分类**：`acpAgentManager` 26（单跑 50/50 全绿，批量下 Promise 未收敛＝测试进程资源/级联，待单独排查）；WSL 语义 14（Linux 主机无 WSL，环境依赖）；`usageStatsService` 9 / `piLocatorInstallations` 9 / `dshHostProcessOrphan` 6 / `agentMemorySettings` 6 / settingsStore 系列 ~18 / 长尾若干（均待逐组定位）；`webLayout` 5 已用基线 worktree 确认为既有源码契约偏差 |
 | 巨文件 | `WebChatApp.tsx` **1646**、`main/index.ts` **8017**（起点 1652 / 8021，均净减） |
 
 ## 本轮验证证据（本机实跑）
