@@ -340,7 +340,9 @@ test("S3 背压：发送队列超过 1MB → 1008 断连，不再无限缓冲", 
 });
 
 test("S3 输入速率：同一秒累计超过 64KB → 1008 断连", () => {
-	const { routes: instance } = routes({ terminal: fakeTerminal(), resolveTarget: (raw) => raw });
+	// 注入固定秒数避免全量并发时跨秒边界导致计数窗口重置（时间敏感测试假红）
+	const fixedSecond = 1234567890;
+	const { routes: instance } = routes({ terminal: fakeTerminal(), resolveTarget: (raw) => raw, nowSecond: () => fixedSecond });
 	const socket = makeSocket();
 	instance.handleUpgrade(makeRequest(), socket);
 	socket.emitData(maskedTextFrame({ type: "create", target: { kind: "project", projectId: "p1" } }));

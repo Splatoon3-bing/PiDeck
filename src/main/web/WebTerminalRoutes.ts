@@ -57,6 +57,8 @@ export type WebTerminalRoutesDeps = {
 	terminal?: WebTerminalCapability;
 	/** 审计出口（测试可注入；生产写 appLogger）。 */
 	log?: (message: string, details: Record<string, unknown>) => void;
+	/** 当前时间（秒）；测试注入避免秒边界跨越导致速率/帧率窗口假重置。 */
+	nowSecond?: () => number;
 };
 
 type TerminalConnection = {
@@ -123,6 +125,11 @@ export class WebTerminalRoutes {
 
 	constructor(private readonly deps: WebTerminalRoutesDeps) {}
 
+	/** 当前秒数：可注入避免测试跨秒边界。 */
+	private nowSecond(): number {
+		return this.deps.nowSecond?.() ?? Math.floor(Date.now() / 1000);
+	}
+
 	/** 供 WebServiceManager 分发 upgrade 请求；与其它路由一样「命中即处理」。 */
 	handleUpgrade(request: IncomingMessage, socket: Duplex, head?: Buffer): void {
 		const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -162,8 +169,8 @@ export class WebTerminalRoutes {
 		const connection: TerminalConnection = {
 			socket,
 			decoder: new WebSocketFrameDecoder(),
-			frameWindow: { second: Math.floor(Date.now() / 1000), count: 0 },
-			inputWindow: { second: Math.floor(Date.now() / 1000), chars: 0 },
+			frameWindow: { second: this.nowSecond(), count: 0 },
+			inputWindow: { second: this.nowSecond(), chars: 0 },
 			tabs: new Set(),
 			quotaKey,
 			closed: false,
@@ -257,7 +264,7 @@ export class WebTerminalRoutes {
 	}
 
 	private handleTextFrame(connection: TerminalConnection, payload: Buffer): void {
-		const nowSecond = Math.floor(Date.now() / 1000);
+		const nowSecond = this.nowSecond();
 		if (connection.frameWindow.second !== nowSecond) {
 			connection.frameWindow = { second: nowSecond, count: 0 };
 		}
@@ -355,7 +362,7 @@ export class WebTerminalRoutes {
 			this.sendError(connection, "webError.terminalInputTooLarge", "input frame too large");
 			return;
 		}
-		const nowSecond = Math.floor(Date.now() / 1000);
+		const nowSecond = this.nowSecond();
 		if (connection.inputWindow.second !== nowSecond) connection.inputWindow = { second: nowSecond, chars: 0 };
 		connection.inputWindow.chars += message.data.length;
 		if (connection.inputWindow.chars > INPUT_BYTES_PER_SECOND) {
