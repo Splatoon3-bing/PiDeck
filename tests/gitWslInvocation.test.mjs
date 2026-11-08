@@ -227,13 +227,13 @@ test("execGit：WSL 分支失败时把 UTF-16LE 的 wsl.exe 报错解码进错�
 test("execGit：WSL 分支的 cd 守卫失败（exit 90）消息可读", async () => {
 	const failing = fakeSpawn({ stderr: Buffer.from("pideck: cannot change directory to /home/dev/gone\n", "utf8"), code: 90 });
 	spawnHandler = failing.handler;
-	await assert.rejects(() => execGit(["status"], { cwd: "\\\\wsl.localhost\\Debian\\home\\dev\\gone" }), /pideck: cannot change directory to \/home\/dev\/gone/);
+	await assert.rejects(() => execGit(["status"], { cwd: "\\\\wsl.localhost\\Debian\\home\\dev\\gone", platform: "win32" }), /pideck: cannot change directory to \/home\/dev\/gone/);
 });
 
 test("runGitCommand：WSL 分支把 stdin 转给 wsl.exe（commit-tree / cat-file --batch 依赖）", async () => {
 	const fake = fakeSpawn({ stdout: "0".repeat(40) + "\n" });
 	spawnHandler = fake.handler;
-	const { stdout } = await runGitCommand(["commit-tree", "abc123"], { cwd: UNC_REPO, input: "pi-rewind:turn-1", env: { GIT_AUTHOR_NAME: "pi-rewind" } });
+	const { stdout } = await runGitCommand(["commit-tree", "abc123"], { cwd: UNC_REPO, platform: "win32", input: "pi-rewind:turn-1", env: { GIT_AUTHOR_NAME: "pi-rewind" } });
 	assert.equal(stdout, "0".repeat(40) + "\n");
 	assert.deepEqual(fake.calls[0].args, expectedWslArgs("Debian", "/home/dev/proj", ["commit-tree", "abc123"], ["GIT_AUTHOR_NAME=pi-rewind"]));
 	assert.deepEqual(fake.calls[0].options.stdio, ["pipe", "pipe", "pipe"]);
