@@ -1,9 +1,9 @@
 ---
 title: "Handoff — Web 对齐 Phase 1A/1B（发布前评审已过，剩非阻断项 + T6）"
 created: 2026-11-07
-updated: 2026-11-07（评审 + 阻断项修复轮）
+updated: 2026-11-07（T9–T13/T15 交付并提交 eb112ccae）
 source_session: 01a1b4db-4e52-7780-bcc5-e06dec67192e
-goal: "Phase 1 阻断项已修、门禁全绿；下一步二选一：非阻断收尾（N2/N4/N5…）或 T6 终端安全评审"
+goal: "T9/T10/T11/T13/T15 已交付并提交；T12 v1 投影收口、T14 评审后置；下一步：T14 实现（可选）或 T6 部署前手动走查"
 workspace: "/home/bing/PiDeck"
 ---
 
@@ -44,7 +44,9 @@ Read the handoff file in full first. Key artifacts: .ai/sdd/specs/001-web-parity
 | T10 收藏 | **本轮完成（未提交）**：`WebFavoritesRoutes` + 面板；添加会话只收 id，来源由 catalog 填 |
 | T13 通知/公告/反馈 | **本轮完成（未提交）**：`WebNoticeRoutes` + `WebNoticeCenter`；反馈复用建会话 + 预填 |
 | T15 PWA/离线 | **本轮完成（未提交）**：三态连接（离线 vs 连接中）；SW 策略沿用既有 |
-| 未做 | T11 生图/视频、T12 远程/WSL/Worktree（需评审）、T14 宿主插件只读（需评审）；`npm test` 全量既有红单 triage；T6 部署前手动走查 |
+| 已提交 | `eb112ccae`（T9/T10/T11/T13/T15 + T12 v1 + T14 评审） |
+| 未做 | T14 宿主插件只读的**实现**（评审结论：v1 不开放，切片已记入评审 §3）；T6 部署前手动走查 |
+| 全量红单 | **已确认无新增**：15724 tests → 15441 pass / **156 fail** / 101 cancelled，与基线 156 一致；新增 22 条测试全绿；`webLayout` 5 红用基线 worktree 对照同为既有 |
 | 巨文件 | `WebChatApp.tsx` **1646**、`main/index.ts` **8017**（起点 1652 / 8021，均净减） |
 
 ## 本轮验证证据（本机实跑）
