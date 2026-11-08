@@ -56,7 +56,7 @@ function ModelRow(props: { item: AvailableModel; active: boolean; onSelect: () =
 				<span className="flex min-w-0 items-center gap-1.5">
 					<span className={cn("min-w-0 truncate text-sm font-medium", props.active ? "text-primary" : "text-foreground")}>{name}</span>
 					{chips.map((chip) => (
-						<span key={chip.kind} className={cn("shrink-0 rounded px-1 py-px text-[10px] leading-4 font-medium", CAPABILITY_CHIP_CLASS[chip.kind])}>
+						<span key={chip.kind} className={cn("shrink-0 rounded px-1 py-px text-micro leading-4 font-medium", CAPABILITY_CHIP_CLASS[chip.kind])}>
 							{chip.label}
 						</span>
 					))}
@@ -180,7 +180,7 @@ export function WebModelSelector(props: { model?: SessionModelPreference; models
 				{rows.length === 0 ? <div className="px-3 py-8 text-center text-sm text-muted-foreground">{t("web.modelEmpty")}</div> : null}
 				{visibleRows.map((row) =>
 					row.kind === "group" ? (
-						<div key={row.key} className="px-3 pt-3 pb-1.5 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground/80 uppercase first:pt-1">
+						<div key={row.key} className="px-3 pt-3 pb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/80 uppercase first:pt-1">
 							{row.label}
 						</div>
 					) : (

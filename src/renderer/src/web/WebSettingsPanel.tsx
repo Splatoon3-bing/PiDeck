@@ -76,7 +76,7 @@ export function WebSettingsPanel(props: { open: boolean; onOpenChange: (open: bo
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						{t("web.settingsTitle")}
-						{props.saving ? <Loader2 className="size-3.5 animate-spin text-text-tertiary" aria-label={t("web.settingsSaving")} /> : null}
+						{props.saving ? <Loader2 className="size-3.5 animate-pideck-spin text-text-tertiary" aria-label={t("web.settingsSaving")} /> : null}
 					</DialogTitle>
 					<DialogDescription className="text-micro">{t("web.settingsDescription")}</DialogDescription>
 				</DialogHeader>
@@ -93,7 +93,7 @@ export function WebSettingsPanel(props: { open: boolean; onOpenChange: (open: bo
 				{/* scroll-ok: transient —— 设置面板内容固定，不是随数据增长的列表。 */}
 				<div className={cn("min-h-0 flex-1 overflow-y-auto pr-0.5", !settings && "opacity-60")}>
 					{!settings ? (
-						<div className="flex items-center justify-center py-8 text-caption text-text-tertiary">{props.loading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : t("web.settingsUnavailable")}</div>
+						<div className="flex items-center justify-center py-8 text-caption text-text-tertiary">{props.loading ? <Loader2 className="size-4 animate-pideck-spin" aria-hidden="true" /> : t("web.settingsUnavailable")}</div>
 					) : (
 						<>
 							<Section title={t("web.settingsAppearance")}>
