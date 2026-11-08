@@ -26,6 +26,14 @@ export type SpawnFailureContext = {
 	cwdExists: boolean;
 	cwdIsDirectory: boolean;
 	/**
+	 * spawn 下发瞬间的探测结论。
+	 * 与 cwdExists 不一致 = 目录只是瞬时不就绪（事后又回来了），此时绝不能告诉用户
+	 * 「目录被删了、去重新指定项目路径」。未传时按「与当前结论一致」处理。
+	 */
+	cwdMissingAtSpawn?: boolean;
+	/** 探测抛错时的 errno code（ENOENT/EACCES/EMFILE…），用于区分「目录没了」与「没权限/句柄耗尽」。 */
+	cwdProbeErrorCode?: string;
+	/**
 	 * pi 可执行文件/垫片本身是否存在。
 	 * Windows 走 cmd.exe 时，pi 路径失效会表现为「cmd.exe 找不到」这类完全误导的报错，
 	 * 所以这一位要单独问：`C:\nvm4w\nodejs\pi.cmd` 在 nvm 切版本后是最典型的失效场景。
@@ -43,7 +51,19 @@ export function describeSpawnFailure(context: SpawnFailureContext): string | nul
 	const raw = context.error.message.trim();
 
 	if (code === "ENOENT") {
-		if (!context.cwdExists || !context.cwdIsDirectory) {
+		const cwdGoneNow = !context.cwdExists || !context.cwdIsDirectory;
+		const cwdGoneAtSpawn = context.cwdMissingAtSpawn ?? cwdGoneNow;
+		if (cwdGoneNow && cwdGoneAtSpawn) {
+			const probeCode = (context.cwdProbeErrorCode ?? "").toUpperCase();
+			if (probeCode && probeCode !== "ENOENT") {
+				// 目录一直在，只是这个进程现在访问不了：ENOENT 的锅不能背在「路径被删」头上。
+				return [
+					`工作目录无法访问：${context.cwd}`,
+					`探测错误：${probeCode}`,
+					`原始错误：${raw}`,
+					probeCode === "EACCES" || probeCode === "EPERM" ? "处理：确认当前用户对该目录及其父目录有读 + 执行权限（目录本身缺 x 位时 cwd 会失效）。" : "处理：系统资源不足（文件句柄/磁盘配额/内存），检查 ulimit -n 与磁盘余量后重试。",
+				].join("\n");
+			}
 			// 与 spawn 报错逐字对应的实测结论：目录不存在才是这条 ENOENT 的真实原因。
 			return [
 				`项目工作目录不存在：${context.cwd}`,
@@ -51,6 +71,15 @@ export function describeSpawnFailure(context: SpawnFailureContext): string | nul
 				`原始错误：${raw}`,
 				"处理：确认项目路径是否被移动/重命名/删除，或磁盘（含网络盘）是否已挂载；",
 				"在 PiDeck 中重新指定该项目的目录后重启会话。",
+			].join("\n");
+		}
+		if (cwdGoneAtSpawn) {
+			// 下发瞬间不可用、错误到达时已恢复：既不是路径配错也不是 pi 缺失，说清楚并建议重试。
+			return [
+				`启动瞬间工作目录不可用（现在已存在）：${context.cwd}`,
+				`原始错误：${raw}（以该目录为 cwd 启动时，libuv 会把「cwd 不可用」报成可执行文件的 ENOENT）`,
+				"处理：目录现在可访问了，直接在会话里重试启动；",
+				"若反复出现，检查是否有进程在瞬时间替换/卸载该项目目录（重建 checkout、容器挂载竞争、备份/同步工具接管）。",
 			].join("\n");
 		}
 		if (!context.piCommandExists) {

@@ -9,16 +9,19 @@
  * 点击会话行 = 打开会话（切 activeSessionId）。
  */
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, CirclePlus, Copy, Download, FolderPlus, GitFork, MoreVertical, Pencil, Play, Plus, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, CirclePlus, Copy, Download, FolderPlus, GitFork, MoreVertical, Pencil, Play, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui-shadcn/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui-shadcn/dropdown-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui-shadcn/alert-dialog";
 import { Input } from "@/components/ui-shadcn/input";
 import { t } from "@/i18n";
 import { WebBrandLockup } from "./WebBrandLockup";
 import { WebBottomSheet } from "./WebBottomSheet";
+import { useIsMobileViewport } from "./useIsMobileViewport";
 import { WEB_SIDEBAR_INITIAL_VISIBLE, growSidebarWindow, resolveSidebarWindow } from "./webSidebarPaging";
 import { groupWebSessionsByParent } from "./webSidebarSessions";
 import { cn } from "@/lib/utils";
+import { resolveConnectionPhase, useBrowserOnline } from "./webConnectivity";
 import { isActiveSessionStatus, sessionStatusDotClass } from "@/agentListDisplay";
 import { WebBackendMark } from "./WebBackendMark";
 import type { WebAcpTool, WebProject, WebRuntime, WebSession, WebState } from "./webTypes";
@@ -63,6 +66,7 @@ export type WebSessionRowAction = "rename" | "duplicate" | "export" | "delete";
  */
 function SessionRows(props: { sessions: WebSession[]; runtimeFor: (sessionId: string) => WebRuntime | undefined; activeSessionId: string; searching: boolean; acpTools?: WebAcpTool[]; onSelect: (sessionId: string) => void; onSessionAction?: (action: WebSessionRowAction, sessionId: string) => void }) {
 	const { sessions, runtimeFor, activeSessionId, searching, acpTools, onSelect, onSessionAction } = props;
+	const mobile = useIsMobileViewport();
 	// requested 是「用户点了几次查看更多」的累计目标条数；进入/退出搜索时回到首页。
 	const [requested, setRequested] = useState(WEB_SIDEBAR_INITIAL_VISIBLE);
 	useEffect(() => setRequested(WEB_SIDEBAR_INITIAL_VISIBLE), [searching]);
@@ -88,8 +92,7 @@ function SessionRows(props: { sessions: WebSession[]; runtimeFor: (sessionId: st
 			return next;
 		});
 	};
-	// 会话操作面板：移动端底部滑出、桌面居中卡片（WebBottomSheet 两形态），
-	// 替代 DropdownMenu——触屏无 hover 看不见触发钮，且菜单会从侧栏右缘弹出遮挡聊天区。
+	// 会话操作：桌面锚定行尾的局部菜单，不用模态框盖住整页；移动端保留大触控底部面板。
 	const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
 	const menuSession = menuSessionId ? sessions.find((s) => s.id === menuSessionId) : undefined;
 	const runAction = (action: WebSessionRowAction) => {
@@ -102,6 +105,17 @@ function SessionRows(props: { sessions: WebSession[]; runtimeFor: (sessionId: st
 	 */
 	const renderRow = (session: WebSession, subagentCount: number, expanded: boolean) => {
 		const runtime = runtimeFor(session.id);
+		const menuTrigger = (
+			<button
+				type="button"
+				className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover/session:opacity-100 [@media(hover:none)]:opacity-100 pointer-coarse:size-9 pointer-coarse:-my-1"
+				aria-label={t("web.sessionMenu")}
+				title={t("web.sessionMenu")}
+				onClick={mobile ? () => setMenuSessionId(session.id) : undefined}
+			>
+				<MoreVertical className="size-3.5" aria-hidden="true" />
+			</button>
+		);
 		return (
 			<div key={session.id} className={cn(sessionRowClass, "session-row group/session", session.id === activeSessionId && selectedRowClass)} title={session.title}>
 				<button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 pointer-coarse:min-h-10" onClick={() => onSelect(session.id)}>
@@ -134,15 +148,31 @@ function SessionRows(props: { sessions: WebSession[]; runtimeFor: (sessionId: st
 					</button>
 				) : null}
 				{onSessionAction ? (
-					<button
-						type="button"
-						className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover/session:opacity-100 [@media(hover:none)]:opacity-100 pointer-coarse:size-9 pointer-coarse:-my-1"
-						aria-label={t("web.sessionMenu")}
-						title={t("web.sessionMenu")}
-						onClick={() => setMenuSessionId(session.id)}
-					>
-						<MoreVertical className="size-3.5" aria-hidden="true" />
-					</button>
+					mobile ? (
+						menuTrigger
+					) : (
+						<DropdownMenu open={menuSessionId === session.id} onOpenChange={(open) => setMenuSessionId(open ? session.id : null)}>
+							<DropdownMenuTrigger asChild>{menuTrigger}</DropdownMenuTrigger>
+							<DropdownMenuContent side="right" align="start" className="w-48">
+								<DropdownMenuItem onSelect={() => runAction("rename")}>
+									<Pencil aria-hidden="true" />
+									{t("web.rename")}
+								</DropdownMenuItem>
+								<DropdownMenuItem onSelect={() => runAction("duplicate")}>
+									<Copy aria-hidden="true" />
+									{t("web.duplicate")}
+								</DropdownMenuItem>
+								<DropdownMenuItem onSelect={() => runAction("export")}>
+									<Download aria-hidden="true" />
+									{t("web.exportHtml")}
+								</DropdownMenuItem>
+								<DropdownMenuItem variant="destructive" onSelect={() => runAction("delete")}>
+									<Trash2 aria-hidden="true" />
+									{t("web.deleteSession")}
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					)
 				) : null}
 			</div>
 		);
@@ -180,7 +210,7 @@ function SessionRows(props: { sessions: WebSession[]; runtimeFor: (sessionId: st
 				</button>
 			)}
 			{/* 会话操作面板：跨端 BottomSheet，大触控行，不被侧栏右缘裁剪 */}
-			<WebBottomSheet open={Boolean(menuSession)} onOpenChange={(open) => !open && setMenuSessionId(null)} title={menuSession?.title || t("web.sessionMenu")}>
+			<WebBottomSheet open={mobile && Boolean(menuSession)} onOpenChange={(open) => !open && setMenuSessionId(null)} title={menuSession?.title || t("web.sessionMenu")}>
 				<ul className="pb-[max(env(safe-area-inset-bottom),0.5rem)]">
 					<li>
 						<button type="button" className="flex h-12 w-full items-center gap-3 px-4 text-left text-sm text-foreground transition-colors hover:bg-muted/60 active:bg-muted" onClick={() => runAction("rename")}>
@@ -235,8 +265,13 @@ export function WebSidebar(props: {
 	onCreateSession: (projectId: string) => void;
 	onCreateProject: (path: string) => Promise<WebProject>;
 	onDeleteProject: (projectId: string) => Promise<void>;
+	/** 桌面端已重新构建（服务端构建指纹变了）：底栏亮「更新」按钮，由用户决定何时重载。 */
+	updateAvailable?: boolean;
+	onApplyUpdate?: () => void;
 }) {
 	const { state, activeSessionId, creatingProjectId, connected, mobileOpen } = props;
+	// 三态：设备离线 ≠ 服务端不可达（后者只该显示「连接中」）。
+	const phase = resolveConnectionPhase(connected, useBrowserOnline());
 	const [search, setSearch] = useState("");
 	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
 	const [addingProject, setAddingProject] = useState(false);
@@ -332,7 +367,7 @@ export function WebSidebar(props: {
 							type="button"
 							variant="outline"
 							size="lg"
-							className="mt-3 h-10 w-full shrink-0 justify-center gap-2 rounded-full border-transparent bg-background text-control font-medium text-foreground shadow-[0_-2px_2px_rgb(72_104_178/4%),0_2px_2px_rgb(106_111_117/9%),0_1px_2px_rgb(72_104_178/8%)] hover:bg-muted/50"
+							className="mt-3 h-10 w-full shrink-0 justify-center gap-2 rounded-full border-transparent bg-background text-control font-medium text-foreground shadow-[0_-2px_2px_rgb(72_104_178/4%),0_2px_2px_rgb(106_111_117/9%),0_1px_2px_rgb(72_104_178/8%)] hover:bg-muted/50 dark:bg-muted/60 dark:shadow-none"
 							disabled={Boolean(creatingProjectId)}
 							onClick={() => props.onCreateSession(newSessionProject.id)}
 							title={t("app.newSession")}
@@ -451,11 +486,28 @@ export function WebSidebar(props: {
 				{/* 底栏连接状态：px-2 与侧栏主体同缘 */}
 				<div className="toolbar-actions sidebar-bottom-actions flex shrink-0 items-center gap-0.5 border-t border-border px-2 py-1">
 					<div className="flex min-w-0 flex-1 items-center gap-2 text-caption text-muted-foreground">
-						{/* 连接态语义色：已连接=success 绿（主色 ink 在新语义档下读不出「通」），连接中=warning */}
-						<span className={cn("size-1.5 shrink-0 rounded-full", connected ? "bg-success" : "bg-warning")} aria-hidden="true" />
-						<span className="truncate">{connected ? t("web.connected") : t("web.connecting")}</span>
-						{/* 宿主版本号：远程端排查「桌面是新版、手机看到旧版」时的第一眼线索 */}
-						{state.version ? <span className="ml-auto shrink-0 font-mono text-micro text-muted-foreground/70">v{state.version}</span> : null}
+						{/* 连接态语义色：已连接=success 绿（主色 ink 在新语义档下读不出「通」），连接中/离线=warning */}
+						<span className={cn("size-1.5 shrink-0 rounded-full", phase === "online" ? "bg-success" : "bg-warning")} aria-hidden="true" />
+						<span className="truncate">{t(phase === "online" ? "web.connected" : phase === "offline" ? "web.offline" : "web.connecting")}</span>
+						{/* 前端自更新：重建后旧 bundle 已不存在，不能让页面自己刷新（会直接 404）；
+						    只在底栏亮提示，点「更新」才重载。ml-auto 把这一组顶到右端。 */}
+						<span className="ml-auto flex shrink-0 items-center gap-1.5">
+							{props.updateAvailable && props.onApplyUpdate ? (
+								<button
+									type="button"
+									className="flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-micro font-medium text-primary transition-colors hover:bg-primary/15"
+									title={t("web.applyUpdateHint")}
+									aria-label={t("web.applyUpdateHint")}
+									data-testid="web-apply-update"
+									onClick={props.onApplyUpdate}
+								>
+									<RefreshCw className="size-3" aria-hidden="true" />
+									{t("web.applyUpdate")}
+								</button>
+							) : null}
+							{/* 宿主版本号：远程端排查「桌面是新版、手机看到旧版」时的第一眼线索 */}
+							{state.version ? <span className="shrink-0 font-mono text-micro text-muted-foreground/70">v{state.version}</span> : null}
+						</span>
 					</div>
 				</div>
 			</aside>

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, safeStorage, screen, session, shell, Tray, Notification, webContents } from "electron";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { renderDshSessionHtml as renderSessionHtmlForExport, sanitizeExportFileName } from "./dsh/dshSessionHtmlExport";
 import { release as osRelease } from "node:os";
 import { createWriteStream, existsSync } from "node:fs";
@@ -214,9 +214,7 @@ if (process.platform === "win32") {
 // 安装包内 electron-builder 的 protocols 配置也会在安装时写入注册表，此处是运行时兜底。
 // dev 通道构建注册 pideck-dev://（安装清单同 scheme）：注册表按 scheme 为键，
 // 两通道同 scheme 会互相抢占关联，点击通知会唤起错误的通道。
-if (app.isPackaged) {
-	app.setAsDefaultProtocolClient(APP_DEEP_LINK_SCHEME);
-}
+if (app.isPackaged) app.setAsDefaultProtocolClient(APP_DEEP_LINK_SCHEME);
 
 // 按「应用版本」隔离的单实例：同版本复用窗口，不同版本可并行。
 // 双通道共用 userData（PiDeck）的前提下，锁文件仍按版本分文件：
@@ -497,6 +495,7 @@ import { registerRemoteGitReadIpc } from "./ipc/remoteGitReadIpc";
 import { registerStoreIpc } from "./ipc/storeIpc";
 import { registerTerminalIpc } from "./ipc/terminalIpc";
 import { registerScratchPadIpc } from "./ipc/scratchPadIpc";
+import { ScratchPadService } from "./scratchPad/ScratchPadService";
 import { registerPasteFilesIpc } from "./ipc/pasteFilesIpc";
 import { registerSecurityIpc } from "./ipc/securityIpc";
 import { registerVisionIpc } from "./ipc/visionIpc";
@@ -535,7 +534,7 @@ import { registerBackupIpc } from "./ipc/backupIpc";
 import { registerCatalogIpc } from "./ipc/catalogIpc";
 import { registerQuickMessagesIpc } from "./ipc/quickMessagesIpc";
 import { registerNoticeHistoryIpc } from "./ipc/noticeHistoryIpc";
-import { NoticeHistoryStore } from "./notices/NoticeHistoryStore";
+import { createNoticeHistoryStore, NoticeHistoryStore } from "./notices/NoticeHistoryStore";
 import { registerReplyActionsIpc } from "./ipc/replyActionsIpc";
 import { QuickMessageStore } from "./quickmessages/QuickMessageStore";
 import { ReplyActionRuleStore } from "./replyactions/ReplyActionRuleStore";
@@ -555,7 +554,9 @@ import { FloatingController } from "./floating/FloatingController";
 import { MiniOverlayWindow } from "./floating/MiniOverlayWindow";
 import { BROWSER_PANEL_PARTITION as BROWSER_PANEL_PARTITION_SHARED, isAllowedBrowserPanelUrl as isAllowedBrowserPanelUrlShared } from "./browser/browserSecurity";
 import { WebServiceManager } from "./web/WebServiceManager";
-import { WebWorkspaceRoutes } from "./web/WebWorkspaceRoutes";
+import { installWebHostPluginDeps, registerWebRoutes } from "./web/registerWebRoutes";
+import { webDomainProviders } from "./web/webStoreProviders";
+import { createWebImageGenDeps, getWebImageGenDeps, installWebImageGenDeps } from "./web/WebImageGenRoutes";
 import { preparePreloadPath } from "./preloadPath";
 import { AppLogger } from "./logging/AppLogger";
 import { setAppLogger } from "./logging/sharedLogger";
@@ -735,6 +736,8 @@ let worktreeService: WorktreeService;
 let gitService: GitService;
 /** refs 变化监听：面板订阅 push/commit/fetch，主进程推送后角标秒级跟平（轮询仍作兜底） */
 let gitRefsWatcher: GitRefsWatcher;
+/** 草稿本存储单实例：IPC 注册时创建，Web 工作区路由复用（只读装配，不重复迁移）。 */
+let scratchPadService!: ScratchPadService;
 let piLocator: PiLocator;
 let agentManager: AgentManager;
 /** 全局模型 capability snapshot；仅在启动/配置变更时临时拉起 Pi。 */
@@ -809,6 +812,7 @@ let remoteHostServiceResolver: (() => Promise<RemoteHostConnectionService> | und
 let soundAlertService: SoundAlertService | null = null;
 /** 应用公告服务（无服务器拉取模式）；null = 未初始化 */
 let announcementService: AnnouncementService | null = null;
+let noticeHistoryStoreRef: NoticeHistoryStore | null = null;
 /** CUA（Computer Use Agent）服务；null = 未初始化 */
 let cuaService: CuaService | null = null;
 /** 浏览器 Agent 服务（内置 webview + CDP）；null = 未初始化 */
@@ -4090,17 +4094,17 @@ function registerIpc() {
 	});
 	registerResourceImportIpc(resourceImportManager);
 
-	registerScratchPadIpc({ appLogger });
+	// 草稿本存储单实例：桌面 IPC 与 Web 服务共用同一份边界/迁移逻辑（避免两套路径规则分叉）。
+	scratchPadService = new ScratchPadService({
+		draftsDir: join(app.getPath("userData"), "drafts"),
+		legacyDraftPath: join(app.getPath("userData"), "scratch-pad.md"),
+		logger: appLogger,
+	});
+	registerScratchPadIpc({ appLogger, service: scratchPadService });
 
 	// 通知历史落盘：showNotice 单点记录后推送主进程，重启可回灌（渲染层环形缓冲只服务当次会话）
-	const noticeHistoryStore = new NoticeHistoryStore({
-		getFilePath: () => join(app.getPath("userData"), "notice-history.json"),
-		log: (level, message, detail) => {
-			if (level === "error") void appLogger.error("notice-history", message, detail);
-			else void appLogger.info("notice-history", message, detail);
-		},
-	});
-	registerNoticeHistoryIpc(noticeHistoryStore);
+	const noticeHistoryStore = createNoticeHistoryStore(() => app.getPath("userData"), appLogger);
+	registerNoticeHistoryIpc((noticeHistoryStoreRef = noticeHistoryStore));
 	// C12：退出前 flush 防抖窗口内的尾巴——store 写盘是防抖合并（500ms），不冲盘就退出
 	// 会丢最后几条通知历史；runAll 会 await 异步清理，写盘完成才放行退出。
 	quitCleanup.register("notice-history", async () => {
@@ -4235,15 +4239,16 @@ function registerIpc() {
 	// 保存/复制要在渲染层拿字节：fetch(pideck-file://) 在该 scheme 上会被拦（corsEnabled: false），
 	// 所以字节走 IPC，白名单与体积判定跟协议同一份实现。
 	registerLocalImageIpc({ resolveRoots: canonicalLocalImageRoots });
+	const imageGenService = new ImageGenService({
+		getProviderCredentials: async (provider) => {
+			const creds = await imageGenConfigStore.getCredentials(provider);
+			if (!creds) return null;
+			return { baseUrl: creds.baseUrl, apiKey: creds.apiKey, extraParams: creds.extraParams, referenceMode: creds.provider.referenceMode, apiStyle: creds.provider.apiStyle };
+		},
+		log: (message, ...args) => appLogger.info("imagegen", message, ...args),
+	});
 	registerImageGenIpc({
-		imageGen: new ImageGenService({
-			getProviderCredentials: async (provider) => {
-				const creds = await imageGenConfigStore.getCredentials(provider);
-				if (!creds) return null;
-				return { baseUrl: creds.baseUrl, apiKey: creds.apiKey, extraParams: creds.extraParams, referenceMode: creds.provider.referenceMode, apiStyle: creds.provider.apiStyle };
-			},
-			log: (message, ...args) => appLogger.info("imagegen", message, ...args),
-		}),
+		imageGen: imageGenService,
 		imageGenConfig: imageGenConfigStore,
 		log: (message, ...args) => appLogger.info("imagegen", message, ...args),
 		readImageBlob: (ref) => imageBlobStore.readPayload(ref),
@@ -4343,6 +4348,8 @@ function registerIpc() {
 			// 生图消息不走 Agent 消息流，refreshAutoTitle 不会触发，标题更新已在 filePath 判断前完成。
 		},
 	});
+	installWebImageGenDeps(createWebImageGenDeps({ config: imageGenConfigStore, service: imageGenService, blobs: imageBlobStore, sessions: imageSessionStore, catalog: () => sessionCatalog }));
+	installWebHostPluginDeps({ catalog: () => hostPlugins.manager.catalog() });
 
 	/**
 	 * 远端会话根判定（远端读取与远端归档共用）：走**与扫描/登记同一份**实现。
@@ -6811,35 +6818,26 @@ app
 				return agentManager.readSessionTodo(entry.filePath);
 			},
 		});
-		// P1-P3 工作区路由（git/files/prompts）：只读能力注入，未装配的服务自动 503
-		webServiceManager.workspaceRoutes = new WebWorkspaceRoutes({
-			listProjects: () => projectStore.list(),
-			git: {
-				isGitRepo: (cwd) => gitService.isGitRepo(cwd),
-				getBranches: (cwd) => gitService.getBranches(cwd),
-				getStatus: (cwd) => gitService.getStatus(cwd),
-				getWorkspaceFileDiff: (cwd, group, filePath, maxBytes) => gitService.getWorkspaceFileDiff(cwd, group, filePath, maxBytes),
-				getCommitLog: (cwd, options) => gitService.getCommitLog(cwd, options),
-			},
-			files: {
-				listTree: (root, maxDepth, directory) => fileSystemService.listTree(root, maxDepth, directory),
-			},
-			// Web 端预览项目外文件时的用户意图门：与桌面端「项目外文件链接」同一套安全等级规则
-			// （denyDirs > 敏感文件 > 目录边界），ask 由 Web 端弹「只读查看」确认后再带 confirm=1 重请求。
-			userReadAccess: (input) => evaluateUserReadAccess(securityStore.getConfig(), input),
-			// 提示词库只在 SQLite 库可用时注入（缺库时路由返回 503，前端隐藏入口）
-			prompts: xuePromptManager
-				? {
-						list: (opts) => xuePromptManager.list(opts),
-						detail: (slug, category) => xuePromptManager.detail(slug, category),
-					}
-				: undefined,
-			// 技能/扩展资产面板（第二批）：与桌面设置页同源；列表脱敏在路由层做
-			assets: {
-				listSkills: () => skillManager.list(),
-				toggleSkill: (skillPath, enabled) => skillManager.toggle(skillPath, enabled),
-				listExtensions: () => extensionManager.list(),
-				setExtensionEnabled: (source, enabled, scope, path, projectId) => extensionManager.toggleFromUi(source, enabled, scope, path, projectId),
+		registerWebRoutes({
+			target: webServiceManager,
+			projects: projectStore,
+			git: gitService,
+			files: fileSystemService,
+			scratchPad: () => scratchPadService,
+			security: securityStore,
+			prompts: xuePromptManager,
+			skills: skillManager,
+			extensions: extensionManager,
+			settings: settingsStore,
+			onThemeApplied: applyNativeThemeSource,
+			...webDomainProviders({ automation: () => automationStore, runs: () => automationRunCoordinator, agents: () => agentProfileStore, invoke: () => agentInvokeService, favorites: () => favoritesStore, catalog: () => sessionCatalog, notices: () => noticeHistoryStoreRef, announcements: () => announcementService }),
+			imagegen: getWebImageGenDeps,
+			terminal: {
+				enabled: () => settingsStore.get().webTerminalEnabled === true,
+				requiresAuth: () => settingsStore.get().webServiceRequiresAuth ?? true,
+				token: () => webServiceManager.getStatus().token,
+				getAgentCwd: (agentId) => compositeAgentGateway?.list().find((candidate) => candidate.id === agentId)?.cwd ?? agentManager.getCwd(agentId),
+				validateAgentTarget: (target) => sessionRuntimeCoordinator.validateTarget(target).ok,
 			},
 		});
 		// C12：退出清理登记（before-quit 统一 runAll）

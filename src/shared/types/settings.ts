@@ -409,6 +409,13 @@ export type AppSettings = {
 	/** 令牌有效期（ms），0 = 永不过期（默认）；从 generatedAt 起算，到期后请求 401 */
 	webServiceTokenExpiresIn?: number;
 	/**
+	 * Web 终端开关（默认 false）。
+	 *
+	 * 为什么单独一个设置：PTY 是最高风险面，必须可关闭、可审计、可清理；且**不进 Web 设置白名单**
+	 * ——只有桌面上才能打开，浏览器不能给自己开终端（见 docs/specs 001-web-parity T6 安全评审 C1）。
+	 */
+	webTerminalEnabled: boolean;
+	/**
 	 * cloudflared 隧道传输协议：http2 = TCP 443（默认，规避国内 UDP QoS 限速）、
 	 * quic = UDP、auto = cloudflared 自行回退。用户环境差异大，允许调整。
 	 */
@@ -1153,6 +1160,55 @@ export type PetNotification = {
  * 口径必须与 main SettingsStore 的 defaultSettings 保持一致：新增设置项时两边同步补，
  * 避免首屏默认与真实默认不一致造成启动闪烁。
  */
+/** Web 端「新会话默认后端」的可选值：只有 pi / dsh 是新会话的默认入口，acp/生图/生视频各有独立启动链路。 */
+export type WebDefaultAgentBackend = "pi" | "dsh";
+
+/**
+ * Web 端设置安全投影（白名单）。
+ *
+ * 主进程 `WebSettingsProjection` 生产、浏览器消费的同一份契约：只含 Web 端真正会应用、
+ * 且泄露/误操作代价可控的字段。token、供应商凭据、安全等级、终端/远端/插件开关一律不在
+ * 这里——新增字段必须同时改主进程白名单，未知键在路由层回 400。
+ */
+export type SafeWebSettings = {
+	/** 明暗偏好：浅色 / 暗色 / 跟随系统 / 跟随时间（schedule 由桌面端设置，Web 只读应用） */
+	theme: AppThemeMode;
+	/** 跟随时间的浅色/暗色起点（只读，用于 Web 端解析 schedule） */
+	themeScheduleLightStart: string;
+	themeScheduleDarkStart: string;
+	/** 全局字号基准档位 */
+	fontSize: AppFontSizeMode;
+	/** UI 字号覆盖；null = 跟随 fontSize */
+	uiFontSize: AppFontSizeMode | null;
+	/** 会话正文字号覆盖；null = 跟随 fontSize */
+	chatFontSize: AppFontSizeMode | null;
+	/** 新建会话的默认后端（Web 只能写 pi / dsh） */
+	defaultAgentBackend: WebDefaultAgentBackend;
+	/**
+	 * 桌面端把默认后端设成了 Web 不支持的档位（acp/生图/生视频）：此时
+	 * `defaultAgentBackend` 只是展示兼底值，设置面板应禁用该控件并说明原因，
+	 * 避免用户把「面板显示 pi」误当成真实默认值。
+	 */
+	defaultAgentBackendDesktopOnly: boolean;
+	/** 发送快捷键（Enter / Ctrl+Enter / Shift+Enter 发送） */
+	sendShortcut: SendShortcutMode;
+	/** 流式输出时是否自动展开中间过程 */
+	expandInterimDuringStream: boolean;
+	/**
+	 * Web 终端是否开启（**只读**投影，供 Web UI 决定是否显示终端入口）。
+	 * 不在 `WebWritableSettings` 里：浏览器不能给自己开终端（T6 评审 C1）。
+	 */
+	terminalEnabled: boolean;
+};
+
+/**
+ * Web 端**可写**的设置子集（`SafeWebSettings` 的写权限边界）。
+ *
+ * 明暗时间表的两个起点（themeScheduleLightStart/DarkStart）只读：Web 设置面板不提供
+ * 时间编辑，只按桌面端配置解析 `theme=schedule`。其它字段一律可读写。
+ */
+export type WebWritableSettings = Pick<SafeWebSettings, "theme" | "fontSize" | "uiFontSize" | "chatFontSize" | "defaultAgentBackend" | "sendShortcut" | "expandInterimDuringStream">;
+
 export function createDefaultAppSettings(): AppSettings {
 	return {
 		useNativeTitleBar: true,
@@ -1244,6 +1300,7 @@ export function createDefaultAppSettings(): AppSettings {
 		webServiceHost: "0.0.0.0",
 		webServicePort: 8765,
 		webServiceRequiresAuth: true,
+		webTerminalEnabled: false,
 		rpcTimeout: 600_000,
 		linkOpenMode: "external",
 		workspaceContentOpenMode: "split",

@@ -12,7 +12,7 @@
  * - 不依赖 electron：文件路径由装配层注入，单测可直接用临时目录。
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout, clearTimeout } from "node:timers";
 import { NOTICE_HISTORY_FILE_VERSION, NOTICE_HISTORY_MAX_ENTRIES, type NoticeHistoryFile, type NoticeHistoryFileEntry } from "../../shared/types/noticeHistory";
 import { parseNoticeHistoryFile, sanitizeNoticeHistoryRecord, toNoticeHistoryFileEntry, type NoticeHistoryDatedEntry } from "../../shared/noticeHistory";
@@ -20,6 +20,23 @@ import { renameWithRetry } from "../utils/fsRetry";
 
 /** 防抖写盘窗口：连发 toast 合并为一次写。 */
 const FLUSH_DEBOUNCE_MS = 500;
+
+/** 生产装配最小日志面（AppLogger 结构兼容）。 */
+type NoticeHistoryLogger = {
+	info: (scope: string, message: string, detail?: unknown) => unknown;
+	error: (scope: string, message: string, detail?: unknown) => unknown;
+};
+
+/**
+ * 生产装配：`<userData>/notice-history.json` + 应用日志适配。
+ * 文件路径与日志命名空间属于本域细节，放在域模块里，装配层只连一行。
+ */
+export function createNoticeHistoryStore(getUserDataDir: () => string, logger: NoticeHistoryLogger): NoticeHistoryStore {
+	return new NoticeHistoryStore({
+		getFilePath: () => join(getUserDataDir(), "notice-history.json"),
+		log: (level, message, detail) => void (level === "error" ? logger.error("notice-history", message, detail) : logger.info("notice-history", message, detail)),
+	});
+}
 
 export class NoticeHistoryStore {
 	private entries: NoticeHistoryDatedEntry[] = [];

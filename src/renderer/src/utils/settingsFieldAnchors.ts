@@ -533,6 +533,12 @@ const SETTINGS_ROW_ANCHORS = [
 	},
 	{
 		tab: "web",
+		slug: "web-terminal-enabled",
+		labelKey: "settings.webTerminalEnabled",
+		keywords: ["网页终端", "web 终端", "终端开关", "terminal", "web terminal"],
+	},
+	{
+		tab: "web",
 		slug: "web-mobile-clients",
 		labelKey: "settings.webMobileClients",
 		keywords: ["手机端", "手机客户端", "移动端", "客户端推荐", "mobile", "android", "pocketdeck"],

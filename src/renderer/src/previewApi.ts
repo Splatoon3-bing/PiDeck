@@ -176,6 +176,7 @@ let previewSettings: AppSettings = {
 	webServiceHost: "0.0.0.0",
 	webServicePort: 8765,
 	webServiceRequiresAuth: true,
+	webTerminalEnabled: false,
 	rpcTimeout: 600_000,
 	linkOpenMode: "external",
 	workspaceContentOpenMode: "split",

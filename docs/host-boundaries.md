@@ -83,3 +83,13 @@
 - 宿主侧必须结算：boot 超时、单 run 超时、进程意外退出、显式 cancel——每个请求的回调恰好一次。
 - 每个 sidecar 在退出清单里登记清理名；stop / restart / 删会话 / 应用退出都要有对应注销路径。
 - 新增例外通道或新增 `pideck-cua` 工具，必须**先改本文档**（用途、审批归属、禁止项、守卫测试），再改代码。
+
+## Web 端宿主能力边界（非 pi 通道）
+
+Web 端（浏览器）不是新的宿主通道，只是主进程既有能力的**投影 + 校验层**：
+
+- 设置：白名单（`WebSettingsProjection`，未知键 400、`Object.hasOwn`）；高风险开关（终端/远端/插件/token/凭据）不进白名单，最多只读投影。
+- 文件/Git：项目根 realpath + symlink 边界（与 `LocalProjectFileBackend` 同源），删除走系统回收站；Git 分支名走 `check-ref-format` + argv 数组。
+- 终端：默认关闭、只有桌面能开；WS 握手 token + Origin 同源；target/shell 严格枚举（复用桌面 parser）；连接级 tab 归属；并发/输入/背压上限；审计只记操作与 id，不记按键内容与宿主路径。
+- 守卫：`tests/web*` 边界测试 + `e2e/web-*.spec.ts`；每条新写路由至少 3 个拒绝用例（未知项目/越界路径/非法载荷）。
+- 新增 Web 宿主能力前**先改本文档与 `docs/maintenance-domains.md`**，再改代码；禁止把 Web 变成任意 shell/文件系统/命令通道，禁止绕开 `WebTokenAuth`。

@@ -20,6 +20,7 @@ export {
 	pruneOldSessions,
 	diffCheckpoints,
 	currentIndexTree,
+	isGitWorkTree,
 	toCheckpointSummary,
 } from "./checkpointCore.ts";
 export type { CheckpointData, CreateCheckpointOpts } from "./checkpointCore.ts";

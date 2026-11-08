@@ -8,8 +8,10 @@ import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
 // SessionTabsBar 应用 → AppearanceTab 行 → i18n 文案。
 const settingsType = readFileSync("src/shared/types/settings.ts", "utf8");
 const store = readFileSync("src/main/settings/SettingsStore.ts", "utf8");
-// data-tab-font-size 的写入已迁入 useAppAppearance（Wave 1 拆分）。
+// data-tab-font-size 的写入已迁入 useAppAppearance（Wave 1 拆分），
+// 具体回落链再抽到 fontSizeAttributes（桌面端与 Web 设置面板共用同一份，2026-11 Web 设置对齐）。
 const app = readFileSync("src/renderer/src/hooks/appearance/useAppAppearance.ts", "utf8");
+const fontSizeAttrs = readFileSync("src/renderer/src/hooks/appearance/fontSizeAttributes.ts", "utf8");
 const foundation = readFileSync("src/renderer/src/styles/foundation.css", "utf8");
 const tailwind = readFileSync("src/renderer/src/styles/tailwind.css", "utf8");
 const tabsBar = readFileSync("src/renderer/src/components/session/SessionTabsBar.tsx", "utf8");
@@ -58,7 +60,9 @@ test("SettingsStore：默认 null + load 归一化（null 必须保持 null）",
 });
 
 test("App 装配层写 data-tab-font-size，未单独设置时回落界面字号", () => {
-	assert.match(app, /root\.dataset\.tabFontSize\s*=\s*settings\.tabBarFontSize\s*\?\?\s*uiFontSize/);
+	assert.match(fontSizeAttrs, /root\.dataset\.tabFontSize\s*=\s*settings\.tabBarFontSize\s*\?\?\s*uiFontSize/);
+	// useAppAppearance 必须调用这份共用实现（否则设置弹窗/Web 面板会各自漂移）
+	assert.match(app, /applyFontSizeAttributes\(root,\s*settings\)/);
 	// 依赖数组必须登记，否则改了设置不重算（视觉要到下次渲染才生效）
 	assert.match(app, /\[[^\]]*settings\.tabBarFontSize[^\]]*\]/);
 	// 首拉 settings 前的兜底默认值已抽到 shared/types/settings.ts 的 createDefaultAppSettings

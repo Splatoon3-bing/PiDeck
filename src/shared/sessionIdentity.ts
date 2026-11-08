@@ -108,7 +108,74 @@ export function isInSubagentArtifactsDir(filePath: string): boolean {
 }
 
 /**
- * 会话路径的规范形式（identity 比较用）：分隔符统一为 `/`、去尾斜杠，Windows 形态折大小写。
+ * 落盘/磁盘探测用的路径修复：只愈合 POSIX 形态上被写成反斜杠的存量路径。
+ *
+ * 与 identity 用的 normalizeSessionFilePathSyntax 不同：Windows 形态（盘符/UNC）
+ * **保持上报时的分隔符字节**（`C:/a/b` 与 `C:\\a\\b` 在 Windows 上等价，但侧栏/回调/测试
+ * 按字节比较路径，强行改风格会造成无意义的重写与误判）；identity 侧由
+ * canonicalizeSessionPath 统一折叠两种写法。
+ */
+export function healSessionPathForStorage(filePath: string): string {
+	if (!filePath) return filePath;
+	if (hasWindowsDrivePrefix(filePath) || hasWindowsUncPrefix(filePath)) return filePath;
+	return collapseSessionPathSegments(filePath.replace(/\\/g, "/"), "/");
+}
+
+/**
+ * 会话文件路径的**语法**归一：按路径形态选分隔符（盘符/UNC = Windows，其余 = POSIX），
+ * 折叠重复分隔符、`.` 与 `..` 段；**不折大小写**。
+ *
+ * 为什么需要它：identity（buildSessionOriginKey）与磁盘探测（existsSync）都要求同一文件只有
+ * 一种字节形态。旧版把 POSIX 路径写成反斜杠形态（pi 在 Windows 上报的 sessionFile、目录
+ * 拼接产物）落进 catalog 后，扫描器按正斜杠发现同一文件会算出两条 originKey（侧栏双记录），
+ * 外部删除清理还会把反斜杠形态当「磁盘不在」误删。反斜杠在 POSIX 上本该是普通文件名字符，
+ * 但会话路径只来自 pi/PiDeck 自身，不存在这种用法（与 toAbsoluteSessionPath 的存量自愈同一条规则）。
+ *
+ * 纯字符串实现：本模块也会被渲染层 import，不能引 node:path（依赖注入的 path 语义由
+ * resolveSessionPathPlatform 从基址形态推出）。
+ */
+export function normalizeSessionFilePathSyntax(filePath: string): string {
+	if (!filePath) return filePath;
+	if (hasWindowsDrivePrefix(filePath) || hasWindowsUncPrefix(filePath)) return normalizeWindowsSessionPath(filePath);
+	return collapseSessionPathSegments(filePath.replace(/\\/g, "/"), "/");
+}
+
+/** 按 `.`/`..` 折叠段；根路径的前导 `..` 丢弃（`/..` → `/`），相对路径保留。 */
+function collapseSessionPathSegments(filePath: string, separator: "\\" | "/"): string {
+	const rooted = filePath.startsWith(separator);
+	const segments: string[] = [];
+	for (const segment of filePath.split(/[\\/]+/u)) {
+		if (!segment || segment === ".") continue;
+		if (segment === "..") {
+			const last = segments[segments.length - 1];
+			if (last !== undefined && last !== "..") segments.pop();
+			else if (!rooted) segments.push("..");
+			continue;
+		}
+		segments.push(segment);
+	}
+	return `${rooted ? separator : ""}${segments.join(separator)}`;
+}
+
+/** Windows 形态：盘符与 UNC 的 server/share 前缀不参与 `..` 折叠。 */
+function normalizeWindowsSessionPath(filePath: string): string {
+	const unified = filePath.replace(/\//g, "\\");
+	if (hasWindowsUncPrefix(unified)) {
+		const [server = "", share = "", ...rest] = unified.slice(2).split(/\\+/u);
+		if (!share) return `\\\\${server}`;
+		const tail = collapseSessionPathSegments(rest.join("\\"), "\\");
+		return tail ? `\\\\${server}\\${share}\\${tail}` : `\\\\${server}\\${share}`;
+	}
+	const drive = /^([A-Za-z]:)(\\*)(.*)$/u.exec(unified);
+	if (!drive) return collapseSessionPathSegments(unified, "\\");
+	const [, letter = "", leading = "", rest = ""] = drive;
+	const tail = collapseSessionPathSegments(rest, "\\");
+	if (!tail) return leading ? `${letter}\\` : letter;
+	return `${letter}${leading ? "\\" : ""}${tail}`;
+}
+
+/**
+ * 会话路径的规范形式（identity 比较用）：语法归一后分隔符统一为 `/`、去尾斜杠，Windows 形态折大小写。
  *
  * 大小写折叠必须按**路径形态**而不是 environment="native" 一刀切（2026-10-08 修正）：
  * native 同时覆盖 Windows 与 Linux/macOS 项目，而 POSIX 文件名区分大小写。
@@ -118,7 +185,7 @@ export function isInSubagentArtifactsDir(filePath: string): boolean {
  * renderer/src/sessionManagerModel.ts 的「WSL 区分大小写」注释同一条规则。
  */
 export function canonicalizeSessionPath(filePath: string, environment: SessionEnvironment): string {
-	const normalized = filePath.replace(/\\/g, "/").replace(/\/+$/, "");
+	const normalized = normalizeSessionFilePathSyntax(filePath).replace(/\\/g, "/").replace(/\/+$/, "");
 	if (environment === "wsl") return normalized;
 	return hasWindowsDrivePrefix(filePath) || hasWindowsUncPrefix(filePath) ? normalized.toLowerCase() : normalized;
 }

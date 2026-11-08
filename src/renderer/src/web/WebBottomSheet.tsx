@@ -84,7 +84,7 @@ export function WebBottomSheet(props: { open: boolean; onOpenChange: (open: bool
 			<div
 				ref={panelRef}
 				className={cn(
-					"relative flex max-h-[85dvh] w-full min-w-0 flex-col overflow-hidden border border-border bg-card text-card-foreground shadow-xl",
+					"relative flex max-h-[85dvh] w-full min-w-0 flex-col overflow-hidden border border-border bg-card text-card-foreground shadow-xl dark:bg-popover",
 					// 窄屏：底部滑出圆角顶；宽屏：居中卡片
 					"rounded-t-2xl sm:mb-0 sm:max-w-md sm:rounded-2xl",
 					// 进场：窄屏上滑、宽屏缩放淡入

@@ -40,6 +40,11 @@ export type PiResourceTargetResolver = {
 	resolve(target: unknown): Promise<PiResourceTargetResolution>;
 };
 
+/** 盘符/UNC 形态：宿主平台 isAbsolute 只看本机语义，POSIX 上会把 `\\\\wsl.localhost\\…` 判成相对路径。 */
+function isWindowsShapedAbsolutePath(value: string): boolean {
+	return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
 function stable(code: string): Error {
 	return new Error(code);
 }
@@ -66,7 +71,7 @@ export function createPiResourceTargetResolver(ports: PiResourceTargetResolverPo
 		// 解析出的环境必须与档案自洽：printenv 回退 / 发行版改名 / 非绝对 HOME 时宁可拒绝，
 		// 也不把资源管理实例指向另一个发行版或本机目录。
 		const unc = parseWslUncPath(environment.windowsHome);
-		if (!unc || unc.distro.toLowerCase() !== profile.distro.toLowerCase() || unc.linuxPath !== environment.linuxHome || !isAbsolute(environment.windowsHome)) {
+		if (!unc || unc.distro.toLowerCase() !== profile.distro.toLowerCase() || unc.linuxPath !== environment.linuxHome || !(isWindowsShapedAbsolutePath(environment.windowsHome) || isAbsolute(environment.windowsHome))) {
 			throw stable(PI_RESOURCE_CODES.unavailable);
 		}
 		return {

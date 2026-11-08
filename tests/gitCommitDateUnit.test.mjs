@@ -12,7 +12,8 @@ import test from "node:test";
 
 const gitService = readFileSync("src/main/git/GitService.ts", "utf8");
 const sharedGitTypes = readFileSync("src/shared/types/git.ts", "utf8");
-const webWorkspaceDrawer = readFileSync("src/renderer/src/web/WebWorkspaceDrawer.tsx", "utf8");
+// 日期渲染随 Git 面板拆到 WebGitPanel（抽屉壳不再持有提交列表）。
+const webGitPanel = readFileSync("src/renderer/src/web/WebGitPanel.tsx", "utf8");
 const desktopGitGraph = readFileSync("src/renderer/src/components/app/git/GitGraph.tsx", "utf8");
 
 test("GitService normalizes the git log timestamp to milliseconds exactly once", () => {
@@ -26,15 +27,15 @@ test("shared CommitEntry documents authorDate as milliseconds", () => {
 	assert.doesNotMatch(line, /\/\/ unix timestamp\s*$/, "a bare 'unix timestamp' comment implies seconds and caused the Web 5-digit-year bug");
 });
 
-test("Web workspace drawer renders commit dates without re-multiplying", () => {
-	assert.doesNotMatch(webWorkspaceDrawer, /authorDate\s*\*\s*1000/, "authorDate is already ms; multiplying again renders years like 58776");
-	assert.match(webWorkspaceDrawer, /new Date\(authorDate\)/, "the drawer must consume authorDate directly");
+test("Web Git panel renders commit dates without re-multiplying", () => {
+	assert.doesNotMatch(webGitPanel, /authorDate\s*\*\s*1000/, "authorDate is already ms; multiplying again renders years like 58776");
+	assert.match(webGitPanel, /new Date\(authorDate\)/, "the panel must consume authorDate directly");
 });
 
 test("Web commit date label tolerates missing or non-finite timestamps", () => {
 	// 抽成函数是为了让 0/NaN/undefined 有统一出口：内联三元会让空值渲染成 1970 或 NaN。
-	assert.match(webWorkspaceDrawer, /function commitDateLabel\(/, "commit date formatting belongs in a helper with its own guard");
-	assert.match(webWorkspaceDrawer, /Number\.isFinite\(authorDate\)/, "non-finite authorDate must not reach new Date()");
+	assert.match(webGitPanel, /function commitDateLabel\(/, "commit date formatting belongs in a helper with its own guard");
+	assert.match(webGitPanel, /Number\.isFinite\(authorDate\)/, "non-finite authorDate must not reach new Date()");
 });
 
 test("desktop GitGraph agrees with the milliseconds contract", () => {

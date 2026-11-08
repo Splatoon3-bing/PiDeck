@@ -73,6 +73,26 @@ async function gitOp(root: string, args: string[], env?: NodeJS.ProcessEnv): Pro
 	return stdout.trim();
 }
 
+/**
+ * root 是否落在可用的 git 工作树里（结论只看退出码 + stdout，与 locale 无关）。
+ *
+ * 为什么不能靠错误文案判断：git 的 `fatal: not a git repository` 会随 locale 变成
+ * `fatal: 不是 Git 仓库（或者任何父目录）：.git`，用英文正则匹配在中文环境永远失配 ——
+ * 实测单日 382 条同样的打点 warn，全是这一个原因。`rev-parse --is-inside-work-tree`
+ * 在工作树内输出 true、裸仓库/`.git` 内部输出 false、不是仓库则非 0 退出，三条路径
+ * 都不需要读文案。
+ *
+ * 只用作「打点前的可行性探测」：结论为 false 时不再白跑整轮快照（快照本身仍会在别处
+ * 正常失败，行为兜底不变）。
+ */
+export async function isGitWorkTree(root: string): Promise<boolean> {
+	try {
+		return (await gitOp(root, ["rev-parse", "--is-inside-work-tree"])) === "true";
+	} catch {
+		return false;
+	}
+}
+
 // ============================================================================
 // 状态快照（快照前先枚举「需要进快照的文件」）
 // ============================================================================

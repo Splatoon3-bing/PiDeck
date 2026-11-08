@@ -15,7 +15,7 @@ test.use({
 	seedSettings: {
 		webServiceEnabled: true,
 		webServiceHost: "127.0.0.1",
-		webServicePort: 8765,
+		webServicePort: 8875,
 		webServiceRequiresAuth: false,
 	},
 });
@@ -32,7 +32,7 @@ async function waitForHealthy(baseUrl: string): Promise<boolean> {
 }
 
 async function openMobilePage(app: import("@playwright/test").ElectronApplication) {
-	const baseUrl = "http://127.0.0.1:8765";
+	const baseUrl = "http://127.0.0.1:8875";
 	expect(await waitForHealthy(baseUrl)).toBe(true);
 	const page = await app.firstWindow();
 	await page.setViewportSize(MOBILE);
@@ -147,8 +147,8 @@ test("mobile: model bottom sheet opens from bottom and selection updates pill", 
 	expect(sheetBox).not.toBeNull();
 	expect(MOBILE.height - ((sheetBox?.y ?? 0) + (sheetBox?.height ?? 0))).toBeLessThanOrEqual(2);
 
-	// 模型列表有可选行（h-12 大触控行，摊平渲染在 div 里而非 ul）；选第二项（Pro）确保 pill 文本变化
-	const firstRow = sheet.getByRole("button", { name: /Mock Model Pro/ }).first();
+	// 模型列表有可选行（两行式：名称 + provider·id，含能力徽标）；选第二项确保 pill 文本变化
+	const firstRow = sheet.getByTestId("web-model-row").first();
 	await expect(firstRow).toBeVisible();
 	await firstRow.click();
 	await expect(sheet).toBeHidden({ timeout: 5_000 });
@@ -174,7 +174,7 @@ test("mobile: thinking sheet lists levels and updates pill", async ({ app }) => 
 	await expect(sheet).toBeVisible({ timeout: 5_000 });
 
 	// 档位列表至少 5 行（off..max 7 档，宽言断言≥5 防御增删档位）
-	const rows = sheet.locator("ul li button, ul button");
+	const rows = sheet.getByTestId("web-thinking-row");
 	expect(await rows.count()).toBeGreaterThanOrEqual(5);
 
 	await rows.last().click();

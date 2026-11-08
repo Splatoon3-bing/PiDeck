@@ -1,26 +1,16 @@
 /**
- * 单个模型行（摊平渲染，便于窗口切片）。
- */
-function ModelRow(props: { item: AvailableModel; active: boolean; onSelect: () => void }) {
-	const name = resolveModelDisplayName(props.item.name, props.item.id);
-	return (
-		<button type="button" className={cn("flex h-12 w-full items-center gap-2 px-4 text-left text-sm transition-colors hover:bg-muted/60 active:bg-muted", props.active ? "text-primary" : "text-foreground")} onClick={props.onSelect}>
-			<span className="min-w-0 flex-1 truncate">
-				{name}
-				<span className="ml-1.5 text-caption text-muted-foreground">{props.item.id}</span>
-			</span>
-			{props.active ? <Check className="size-4 shrink-0 text-primary" aria-hidden="true" /> : null}
-		</button>
-	);
-}
-
-/**
  * WebModelSelector — 模型选择（Composer 工具行驻留）。
  *
- * 第三批（DeepSeek 式交互）：从 WebHeader 的 PC 式 Command popover 迁到 composer 工具行：
- * - pill 触发器常驻（当前模型名 truncate），与思考 pill 并排
- * - WebBottomSheet：窄屏底部滑出（h-12 大触控行）、宽屏居中卡片
- * - provider 分组列表 + 本地过滤（触屏无 kbd 交互，不用 Command）；刷新绕缓存重拉
+ * 交互：pill 触发器常驻（当前模型名 truncate），与思考 pill 并排；
+ * 窄屏底部弹层（大触控行）、桌面锚定触发器的局部面板（WebPickerSurface）。
+ *
+ * 列表信息层级（2026-11 视觉返工）：每行两行式——首行模型名 + 能力徽标（推理/视觉，带语义色），
+ * 次行 provider · id + 上下文窗口。行高 60px、行间 4px、分组标题留 14px 上间距：
+ * 40+ 模型滚动时靠留白和分组断开，不再是一整片灰字。
+ * 「最近使用」置顶（含当前模型），存 localStorage，不参与设置同步。
+ *
+ * provider 分组 + 本地过滤（触屏无 kbd 交互，不用 Command）；刷新绕缓存重拉；
+ * 列表按窗口切片渲染（模型表动辄 300+ 条）。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronsUpDown, RefreshCw, Search } from "lucide-react";
@@ -30,22 +20,65 @@ import { Button } from "@/components/ui-shadcn/button";
 import { Input } from "@/components/ui-shadcn/input";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { WebBottomSheet } from "./WebBottomSheet";
+import { WebPickerSurface } from "./WebPickerSurface";
+import { buildModelGroups, formatContextWindow, modelCapabilityChips, modelKey, pushRecentModel, readRecentModels, writeRecentModels } from "./webModelPicker";
 
 /** 弹层行的扁平表示：分组标题与模型行混排，便于按窗口切片渲染。 */
-type ModelSheetRow = { kind: "group"; key: string; provider: string } | { kind: "model"; key: string; item: AvailableModel };
+type ModelSheetRow = { kind: "group"; key: string; label: string } | { kind: "model"; key: string; item: AvailableModel };
 
 /** 首屏渲染的行数（含分组标题）；模型表动辄 300+ 条，一次全渲染会造出上万像素的滚动容器。 */
 const MODEL_ROW_WINDOW = 40;
 /** 每次增量追加的行数。 */
 const MODEL_ROW_STEP = 40;
 
-/** 把分组结果摊平成可切片的单行列表（组序=模型表顺序，组内保持原序）。 */
-function flattenModelRows(groups: [string, AvailableModel[]][]): ModelSheetRow[] {
+/** 能力徽标配色：推理走思考身份色（靛紫），视觉走主题强调色，两个都在暗色下自带提亮档。 */
+const CAPABILITY_CHIP_CLASS = {
+	reasoning: "bg-[color-mix(in_srgb,var(--color-thinking)_14%,transparent)] text-[var(--color-thinking)]",
+	vision: "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]",
+} as const;
+
+function ModelRow(props: { item: AvailableModel; active: boolean; onSelect: () => void }) {
+	const name = resolveModelDisplayName(props.item.name, props.item.id);
+	const chips = modelCapabilityChips(props.item, { reasoning: t("web.modelCapabilityReasoning"), vision: t("web.modelCapabilityVision") });
+	const context = formatContextWindow(props.item.contextWindow);
+	return (
+		<button
+			type="button"
+			data-testid="web-model-row"
+			data-active={props.active ? "true" : undefined}
+			aria-pressed={props.active}
+			className={cn("group relative flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 pointer-coarse:min-h-14", props.active && "bg-muted/40")}
+			onClick={props.onSelect}
+		>
+			{/* 选中态用左侧主色竖条：比整行铺色更克制，也不和 hover 抢视觉 */}
+			<span aria-hidden="true" className={cn("absolute inset-y-2 left-0 w-0.5 rounded-full bg-primary transition-opacity", props.active ? "opacity-100" : "opacity-0")} />
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="flex min-w-0 items-center gap-1.5">
+					<span className={cn("min-w-0 truncate text-sm font-medium", props.active ? "text-primary" : "text-foreground")}>{name}</span>
+					{chips.map((chip) => (
+						<span key={chip.kind} className={cn("shrink-0 rounded px-1 py-px text-micro leading-4 font-medium", CAPABILITY_CHIP_CLASS[chip.kind])}>
+							{chip.label}
+						</span>
+					))}
+				</span>
+				<span className="flex min-w-0 items-center gap-1.5 text-micro text-muted-foreground">
+					<span className="min-w-0 truncate">
+						{props.item.provider} · {props.item.id}
+					</span>
+					{context ? <span className="shrink-0 font-mono tabular-nums text-muted-foreground/80">{context}</span> : null}
+				</span>
+			</span>
+			{props.active ? <Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" /> : null}
+		</button>
+	);
+}
+
+/** 把分组结果摊平成可切片的单行列表（组序由 buildModelGroups 决定，组内保持原序）。 */
+function flattenModelRows(groups: ReturnType<typeof buildModelGroups>): ModelSheetRow[] {
 	const rows: ModelSheetRow[] = [];
-	for (const [provider, items] of groups) {
-		rows.push({ kind: "group", key: `group:${provider}`, provider });
-		for (const item of items) rows.push({ kind: "model", key: `${provider}::${item.id}`, item });
+	for (const group of groups) {
+		rows.push({ kind: "group", key: `group:${group.key}`, label: group.label });
+		for (const item of group.models) rows.push({ kind: "model", key: `${group.key}::${modelKey(item)}`, item });
 	}
 	return rows;
 }
@@ -54,28 +87,23 @@ export function WebModelSelector(props: { model?: SessionModelPreference; models
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const [rendered, setRendered] = useState(MODEL_ROW_WINDOW);
+	const [recentKeys, setRecentKeys] = useState<string[]>(() => readRecentModels(typeof window === "undefined" ? undefined : window.localStorage));
 	const sentinelRef = useRef<HTMLButtonElement | null>(null);
 	const { model, models, onChange } = props;
-	const currentValue = model ? `${model.provider}::${model.modelId}` : "";
+	const currentKey = model ? modelKey({ provider: model.provider, id: model.modelId }) : null;
 	const selectedName = model ? resolveModelDisplayName(model.modelName, model.modelId) : undefined;
 	// pill 只显示模型名（provider 在弹层行内呈现），窄屏不挤
 	const pillLabel = selectedName ?? t("web.model");
 
-	// 弹层打开时按 query 过滤后按 provider 分组（组序=模型表顺序）
+	// 弹层打开时按 query 过滤后按「最近使用 → provider」分组
 	const groups = useMemo(() => {
 		const keyword = query.trim().toLowerCase();
-		const filtered = keyword ? models.filter((item) => `${item.provider} ${item.name} ${item.id}`.toLowerCase().includes(keyword)) : models;
-		const byProvider = new Map<string, AvailableModel[]>();
-		for (const item of filtered) {
-			const list = byProvider.get(item.provider);
-			if (list) list.push(item);
-			else byProvider.set(item.provider, [item]);
-		}
-		return [...byProvider.entries()];
-	}, [models, query]);
+		const filtered = keyword ? models.filter((item) => `${item.provider} ${item.name ?? ""} ${item.id}`.toLowerCase().includes(keyword)) : models;
+		return buildModelGroups(filtered, recentKeys, currentKey, t("web.recentModels"));
+	}, [models, query, recentKeys, currentKey]);
 
 	const rows = useMemo(() => flattenModelRows(groups), [groups]);
-	// 搜索词变化回到首屏窗口：结果集变小，保留旧窗口没有意义；弹层重开同样重置。
+	// 搜索词变化回到首屏窗口：结果集变小，保留旧窗口没有意义。
 	useEffect(() => setRendered(MODEL_ROW_WINDOW), [query]);
 	const visibleRows = rows.slice(0, Math.min(rendered, rows.length));
 	const hiddenCount = rows.length - visibleRows.length;
@@ -95,72 +123,77 @@ export function WebModelSelector(props: { model?: SessionModelPreference; models
 		return () => observer.disconnect();
 	}, [hiddenCount, rows.length]);
 
+	const select = (item: AvailableModel) => {
+		const next = pushRecentModel(recentKeys, modelKey(item));
+		setRecentKeys(next);
+		writeRecentModels(typeof window === "undefined" ? undefined : window.localStorage, next);
+		onChange(item);
+		setOpen(false);
+	};
+
 	return (
-		<>
-			<Button
-				type="button"
-				variant="ghost"
-				className="h-8 max-w-[30vw] shrink-0 justify-start gap-1 px-1 text-caption text-muted-foreground hover:bg-muted/60 hover:text-foreground pointer-coarse:h-9 sm:max-w-[220px]"
-				aria-label={t("web.model")}
-				title={selectedName ? `${selectedName} · ${model?.provider ?? ""}/${model?.modelId ?? ""}` : t("web.model")}
-				onClick={() => {
-					setQuery("");
-					setRendered(MODEL_ROW_WINDOW);
-					setOpen(true);
-				}}
-			>
-				<span className="min-w-0 truncate">{pillLabel}</span>
-				<ChevronsUpDown className="size-4 shrink-0" aria-hidden="true" />
-			</Button>
-			<WebBottomSheet open={open} onOpenChange={setOpen} title={t("web.modelSheetTitle")}>
-				<div className="flex flex-col">
-					{/* 搜索 + 刷新：sticky 头部，滚动时保持可用 */}
-					<div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border bg-card px-3 py-2">
-						<div className="relative min-w-0 flex-1">
-							<Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-							<Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("web.modelSearch")} className="h-9 bg-background pl-8 text-sm" aria-label={t("web.modelSearch")} />
-						</div>
-						{props.onRefresh ? (
-							<Button
-								type="button"
-								variant="ghost"
-								size="icon-sm"
-								className="shrink-0 text-muted-foreground hover:text-foreground pointer-coarse:size-9"
-								aria-label={props.refreshing ? t("app.modelPickerRefreshing") : t("app.modelPickerRefresh")}
-								title={props.refreshing ? t("app.modelPickerRefreshing") : t("app.modelPickerRefresh")}
-								disabled={props.refreshing}
-								onClick={() => props.onRefresh?.()}
-							>
-								<RefreshCw size={14} className={props.refreshing ? "animate-pideck-spin" : ""} aria-hidden="true" />
-							</Button>
-						) : null}
-					</div>
-					{rows.length === 0 ? <div className="px-4 py-6 text-center text-sm text-muted-foreground">{t("web.modelEmpty")}</div> : null}
-					{visibleRows.map((row) =>
-						row.kind === "group" ? (
-							<div key={row.key} className="px-4 pt-2 pb-1 text-micro font-medium tracking-wide text-muted-foreground uppercase">
-								{row.provider}
-							</div>
-						) : (
-							<ModelRow
-								key={row.key}
-								item={row.item}
-								active={`${row.item.provider}::${row.item.id}` === currentValue}
-								onSelect={() => {
-									onChange(row.item);
-									setOpen(false);
-								}}
-							/>
-						),
-					)}
-					{hiddenCount > 0 ? (
-						<button ref={sentinelRef} type="button" className="flex h-10 w-full items-center justify-center text-caption text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground" onClick={() => setRendered((current) => Math.min(rows.length, current + MODEL_ROW_STEP))}>
-							{t("web.moreSessions", { count: hiddenCount })}
-						</button>
-					) : null}
-					<div className="h-[max(env(safe-area-inset-bottom),0.5rem)]" />
+		<WebPickerSurface
+			open={open}
+			onOpenChange={setOpen}
+			title={t("web.modelSheetTitle")}
+			className="w-[30rem]"
+			trigger={
+				<Button
+					type="button"
+					variant="ghost"
+					className="h-8 max-w-[30vw] shrink-0 justify-start gap-1 px-1 text-caption text-muted-foreground hover:bg-muted/60 hover:text-foreground pointer-coarse:h-9 sm:max-w-[220px]"
+					aria-label={t("web.model")}
+					title={selectedName ? `${selectedName} · ${model?.provider ?? ""}/${model?.modelId ?? ""}` : t("web.model")}
+					onClick={() => {
+						setQuery("");
+						setRendered(MODEL_ROW_WINDOW);
+					}}
+				>
+					<span className="min-w-0 truncate">{pillLabel}</span>
+					<ChevronsUpDown className="size-4 shrink-0" aria-hidden="true" />
+				</Button>
+			}
+		>
+			{/* 搜索 + 刷新：轻量内嵌搜索（不强聚焦环），左右内边距与行对齐 */}
+			<div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-2">
+				<div className="relative min-w-0 flex-1">
+					<Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+					<Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("web.modelSearch")} className="h-9 border-transparent bg-muted/50 pl-8 text-sm shadow-none focus-visible:border-border/80 focus-visible:ring-0" aria-label={t("web.modelSearch")} />
 				</div>
-			</WebBottomSheet>
-		</>
+				{props.onRefresh ? (
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-sm"
+						className="shrink-0 text-muted-foreground hover:text-foreground pointer-coarse:size-9"
+						aria-label={props.refreshing ? t("app.modelPickerRefreshing") : t("app.modelPickerRefresh")}
+						title={props.refreshing ? t("app.modelPickerRefreshing") : t("app.modelPickerRefresh")}
+						disabled={props.refreshing}
+						onClick={() => props.onRefresh?.()}
+					>
+						<RefreshCw size={14} className={props.refreshing ? "animate-pideck-spin" : ""} aria-hidden="true" />
+					</Button>
+				) : null}
+			</div>
+			{/* scroll-ok: bounded —— 行数有硬上限（受控分页 / 上限常量 / 固定枚举），不随数据无限增长。 */}
+			<div className="min-h-0 flex-1 overflow-y-auto px-2 py-1.5">
+				{rows.length === 0 ? <div className="px-3 py-8 text-center text-sm text-muted-foreground">{t("web.modelEmpty")}</div> : null}
+				{visibleRows.map((row) =>
+					row.kind === "group" ? (
+						<div key={row.key} className="px-3 pt-3 pb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/80 uppercase first:pt-1">
+							{row.label}
+						</div>
+					) : (
+						<ModelRow key={row.key} item={row.item} active={modelKey(row.item) === currentKey} onSelect={() => select(row.item)} />
+					),
+				)}
+				{hiddenCount > 0 ? (
+					<button ref={sentinelRef} type="button" className="mt-1 flex h-10 w-full items-center justify-center rounded-lg text-caption text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground" onClick={() => setRendered((current) => Math.min(rows.length, current + MODEL_ROW_STEP))}>
+						{t("web.moreSessions", { count: hiddenCount })}
+					</button>
+				) : null}
+				<div className="h-[max(env(safe-area-inset-bottom),0.75rem)]" />
+			</div>
+		</WebPickerSurface>
 	);
 }

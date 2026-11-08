@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type {
 	AgentRuntimeState,
@@ -43,10 +44,14 @@ import { WebStaticAssets } from "./WebStaticAssets";
 import { WebApiRoutes } from "./WebApiRoutes";
 import { WebStateEventHub } from "./WebStateEventHub";
 import { toPublicSessions } from "./WebSessionProjection";
+import { visibleWebProjects, visibleWebSessions } from "./WebProjectProjection";
 import { toWebSecurityState } from "./WebSecurityProjection";
 import { openSessionStream, writeSessionStreamError } from "./WebSessionStream";
 import { WebTokenAuth, type WebTokenPolicy } from "./WebTokenAuth";
 import { WebEventStreamRouter, type AgentChannelEventSource, type PiEvent } from "./WebEventStream";
+import { WEB_WRITE_METHODS, WebWriteRateLimiter } from "./WebRateLimit";
+import type { WebTerminalRoutes } from "./WebTerminalRoutes";
+import { resolveUpgradeTarget } from "./WebSocketUpgradeRouter";
 
 type WebServiceSettings = Pick<AppSettings, "webServiceEnabled" | "webServiceHost" | "webServicePort" | "webServiceRequiresAuth" | "webServiceToken" | "webServiceTokenGeneratedAt" | "webServiceTokenExpiresIn">;
 
@@ -235,10 +240,28 @@ export class WebServiceManager {
 	} | null = null;
 	/** P1-P3 工作区路由（git/files/prompts）；未装配时这些路由 404。由 main/index.ts 在构造后注入。 */
 	workspaceRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 设置路由（白名单投影/写入）；未装配时 /api/settings 走 404。由 main/index.ts 在构造后注入。 */
+	settingsRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** Web 终端路由（upgrade 分发）；未装配或开关关闭时握手被拒（403）。 */
+	terminalRoutes: WebTerminalRoutes | null = null;
+	/** 自动化路由（T8）；未装配时 /api/automations 走 404。 */
+	automationRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 智能体路由（T9）；未装配时 /api/agents 走 404。 */
+	agentRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 收藏路由（T10）；未装配时 /api/favorites 走 404。 */
+	favoriteRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 通知/公告路由（T13）；未装配时 /api/notices、/api/announcements 走 404。 */
+	noticeRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 宿主插件只读路由（T14）；未装配时 /api/host-plugins 走 404。 */
+	hostPluginRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 生图路由（T11）；未装配时 /api/imagegen/* 走 404。 */
+	imageGenRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
 	private readonly tokenAuth: WebTokenAuth;
+	/** 写路由限速：默认按鉴权主体（token 哈希）或对端 IP 分桶，240 写/分钟。 */
+	private readonly writeRateLimiter = new WebWriteRateLimiter();
 	/** 静态产物出口与 dev 代理（实现已迁到 WebStaticAssets）。 */
 	private readonly staticAssets: WebStaticAssets;
 
@@ -325,7 +348,10 @@ export class WebServiceManager {
 
 	/** 设置页手动修改令牌 / 过期策略（web:set-token IPC）：立即热生效 + 持久化，不重启服务。 */
 	setTokenPolicy(input: { token?: string; expiresIn?: number }): void {
+		const previous = this.tokenAuth.token;
 		this.tokenAuth.setPolicy(input);
+		// 令牌实际变化时，已建立的 WebSocket 连接（WS 不能重发认证头）必须断开，不能继续用旧身份。
+		if (this.tokenAuth.token !== previous) this.terminalRoutes?.closeAll("token rotated");
 	}
 
 	/** expiresIn > 0 时的绝对过期时刻；0/未设置 → null（永不过期）。 */
@@ -336,6 +362,7 @@ export class WebServiceManager {
 	/** 轮换访问令牌（设置页「重新生成令牌」）：立即换新并广播状态。 */
 	rotateToken(): void {
 		this.tokenAuth.rotate();
+		this.terminalRoutes?.closeAll("token rotated");
 	}
 	/** 渲染层展示二维码/令牌用；未运行时返回空形状（running=false） */
 	getStatus(): WebServiceStatusInfo {
@@ -351,6 +378,8 @@ export class WebServiceManager {
 		this.eventStreamRouter.unbindChannelSource();
 		this.eventStreamRouter.unbindAcpChannelSource();
 		this.stateHub.dispose();
+		// Web 终端连接（upgrade 后的 socket）不归 server.closeAllConnections 管，必须显式关闭。
+		this.terminalRoutes?.closeAll();
 		if (!this.server) return;
 		const server = this.server;
 		this.server = null;
@@ -438,13 +467,17 @@ export class WebServiceManager {
 			socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
 		});
 
-		// dev 模式：把 WebSocket upgrade 请求（vite HMR 热更新）转发到 dev server，
-		// 否则浏览器连同源的 / 只拿到 HTTP 升级失败，改代码不热更新。
-		if (this.staticAssets.devRendererUrl) {
-			server.on("upgrade", (request, socket, head) => {
-				this.staticAssets.proxyWebSocket(request, socket, head);
-			});
-		}
+		// WebSocket upgrade 分发：
+		// - /api/terminal → Web 终端路由（S1：握手校验；未装配时直接销毁）；
+		// - dev 模式其余路径 → vite HMR 代理（否则改代码不热更新）；
+		// - 生产模式其余路径 → 销毁（没有别的 WS 能力）。
+		server.on("upgrade", (request, socket, head) => {
+			const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+			const target = resolveUpgradeTarget({ pathname: url.pathname, hasTerminalRoutes: this.terminalRoutes !== null, devProxyEnabled: Boolean(this.staticAssets.devRendererUrl) });
+			if (target === "terminal") this.terminalRoutes?.handleUpgrade(request, socket, head);
+			else if (target === "dev-proxy") this.staticAssets.proxyWebSocket(request, socket, head);
+			else socket.destroy();
+		});
 
 		await new Promise<void>((resolve, reject) => {
 			server.once("error", reject);
@@ -489,6 +522,15 @@ export class WebServiceManager {
 			this.sendError(response, 401, "webError.unauthorized", "A valid web service token is required");
 			return;
 		}
+		// 限速只盖写方法（读/SSE 不限）：写能改设置/文件/Git，脚本刷写需要兜底闸门。
+		// 放在鉴权之后：未授权请求直接 401，不消耗桶。
+		if (url.pathname.startsWith("/api/") && WEB_WRITE_METHODS.has(request.method ?? "")) {
+			const verdict = this.writeRateLimiter.take(this.writeRateLimitKey(request));
+			if (!verdict.allowed) {
+				this.sendError(response, 429, "webError.rateLimited", "Too many write requests", undefined, { "retry-after": String(Math.ceil(verdict.retryAfterMs / 1000)) });
+				return;
+			}
+		}
 		if (url.pathname === "/api/events" && request.method === "GET") {
 			this.stateHub.handle(request, response);
 			return;
@@ -496,13 +538,27 @@ export class WebServiceManager {
 		if (await this.apiRoutes.handle(url, request, response)) return;
 
 		if (url.pathname.startsWith("/api/")) {
-			// P1-P3 工作区路由（git/files/prompts）：独立模块承载，返回 false 表示未命中
+			// 设置（白名单投影/写入）与工作区路由（git/files/prompts）：独立模块承载，返回 false 表示未命中
+			if (this.settingsRoutes && (await this.settingsRoutes.handle(url, request, response))) return;
+			if (this.automationRoutes && (await this.automationRoutes.handle(url, request, response))) return;
+			if (this.agentRoutes && (await this.agentRoutes.handle(url, request, response))) return;
+			if (this.favoriteRoutes && (await this.favoriteRoutes.handle(url, request, response))) return;
+			if (this.noticeRoutes && (await this.noticeRoutes.handle(url, request, response))) return;
+			if (this.imageGenRoutes && (await this.imageGenRoutes.handle(url, request, response))) return;
+			if (this.hostPluginRoutes && (await this.hostPluginRoutes.handle(url, request, response))) return;
 			if (this.workspaceRoutes && (await this.workspaceRoutes.handle(url, request, response))) return;
 			this.sendError(response, 404, "webError.apiNotFound", "API not found");
 			return;
 		}
 
 		await this.staticAssets.serve(url, response);
+	}
+
+	/** 限速分桶 key：有 Bearer 时取 token 哈希（不在内存里留明文），无鉴权模式取对端 IP。 */
+	private writeRateLimitKey(request: IncomingMessage): string {
+		const auth = request.headers.authorization;
+		const raw = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : (request.socket?.remoteAddress ?? "unknown");
+		return createHash("sha256").update(raw).digest("hex").slice(0, 16);
 	}
 
 	/**
@@ -577,13 +633,16 @@ export class WebServiceManager {
 		// messagesBySession 已移除（P0：轮询全量消息是纯浪费，React A2 从不消费；
 		// LAN Web 全量 UI 改为按 runtime 拉 GET /api/sessions/:id/messages，A1 兜底页
 		// 切会话/流结束时拉 /messages/page）。
+		// T12 v1：远程（SSH）项目没有本机路径，投影给 Web 只会得到必然失败的入口，因此不投影。
+		const projects = visibleWebProjects(this.deps.listProjects());
 		const sessions = await this.deps.listCatalogSessions();
 		const runtimes = this.deps.listSessionRuntimes();
+		const buildId = this.staticAssets.buildId();
 		return {
-			projects: this.deps.listProjects(),
+			projects,
 			// 会话按 Web 可见字段投影：filePath/environment/dshSessionId/agentPreset/preview/
 			// messageCount 等桌面端专用字段不下发（实测占快照 ~99% 中的三成，Web 端零消费）。
-			sessions: toPublicSessions(sessions),
+			sessions: toPublicSessions(visibleWebSessions(sessions, projects)),
 			runtimes,
 			pendingUiRequests: this.deps.listPendingUiRequests(),
 			// ACP 工具清单（id/name，已按 acpEnabled + enabled 门控）：Web 端后端选择器的 ACP 入口。
@@ -594,6 +653,9 @@ export class WebServiceManager {
 			...(this.deps.getSecurityConfig ? { security: toWebSecurityState(this.deps.getSecurityConfig()) } : {}),
 			// 宿主版本号：侧栏底栏展示用（常量，进 ETag 不影响命中）。
 			...(this.deps.getAppVersion ? { version: this.deps.getAppVersion() } : {}),
+			// 构建指纹：Web 端对比「打开页面时」与「服务端当前」的 bundle 版本，发现重建后
+			// 只展示「更新」按钮，不自动重载——否则重建瞬间正在用的手机页面会因旧 asset 404 白屏。
+			...(buildId ? { buildId } : {}),
 		};
 	}
 
@@ -636,8 +698,8 @@ export class WebServiceManager {
 		return writeJson(response, body, extraHeaders);
 	}
 
-	private sendError(response: ServerResponse, statusCode: number, code: string, error: string, params?: Record<string, string | number>) {
-		return writeError(response, statusCode, code, error, params);
+	private sendError(response: ServerResponse, statusCode: number, code: string, error: string, params?: Record<string, string | number>, extraHeaders?: Record<string, string>) {
+		return writeError(response, statusCode, code, error, params, extraHeaders);
 	}
 
 	private sendNoContent(response: ServerResponse) {

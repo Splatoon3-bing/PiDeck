@@ -29,7 +29,13 @@ async function withPlatform(platform, fn) {
 /** 在临时 home 下造字体文件并加载模块（每次调用得到独立模块实例 = 独立缓存）。 */
 function loadSystemFonts(homeDir) {
 	const electronStub = { app: { getPath: (name) => (name === "home" ? homeDir : tmpdir()) } };
-	return loadTsCommonJs("src/main/fonts/SystemFonts.ts", { stubs: { electron: electronStub } });
+	// 本机若有 fc-list，会先走「真实系统字体」分支，把开发机字体混进断言。
+	// 测试只验证目录兜底：stub 掉 fc-list（ENOENT），并注入空系统目录。
+	const execFileStub = (...args) => {
+		const callback = args[args.length - 1];
+		callback(Object.assign(new Error("spawn fc-list ENOENT"), { code: "ENOENT" }));
+	};
+	return loadTsCommonJs("src/main/fonts/SystemFonts.ts", { stubs: { electron: electronStub, "node:child_process": { execFile: execFileStub } } });
 }
 
 test("fontFamilyFromFileName：剥扩展名与尾部样式词（含直接相连的 BoldItalic）", async () => {
@@ -57,7 +63,7 @@ test("listSystemFontFamilies：目录兜底扫描 + 过滤 ./@ 前缀 + 去重�
 
 		const result = await withPlatform("linux", async () => {
 			const fonts = loadSystemFonts(home);
-			return fonts.listSystemFontFamilies();
+			return fonts.listSystemFontFamilies({ linuxSystemDirs: [] });
 		});
 
 		assert.deepEqual([...result], ["Alpha Mono", "Zebra Sans"]);
@@ -75,21 +81,21 @@ test("listSystemFontFamilies：结果进程内缓存，refresh/reset 才重扫",
 
 		await withPlatform("linux", async () => {
 			const fonts = loadSystemFonts(home);
-			const first = await fonts.listSystemFontFamilies();
+			const first = await fonts.listSystemFontFamilies({ linuxSystemDirs: [] });
 			assert.deepEqual([...first], ["Cache Probe"]);
 
 			// 删掉文件后普通调用仍返回缓存（不重扫）
 			rmSync(join(userFonts, "Cache Probe.ttf"));
-			const cached = await fonts.listSystemFontFamilies();
+			const cached = await fonts.listSystemFontFamilies({ linuxSystemDirs: [] });
 			assert.equal(cached, first, "缓存未生效：第二次调用重新扫描了目录");
 			assert.deepEqual([...cached], ["Cache Probe"]);
 
 			// refresh / reset 后重扫
-			const refreshed = await fonts.listSystemFontFamilies({ refresh: true });
+			const refreshed = await fonts.listSystemFontFamilies({ refresh: true, linuxSystemDirs: [] });
 			assert.deepEqual([...refreshed], []);
 			writeFileSync(join(userFonts, "Back Again.ttf"), "not a real font");
 			fonts.resetSystemFontCache();
-			const afterReset = await fonts.listSystemFontFamilies();
+			const afterReset = await fonts.listSystemFontFamilies({ linuxSystemDirs: [] });
 			assert.deepEqual([...afterReset], ["Back Again"]);
 		});
 	} finally {
@@ -105,7 +111,7 @@ test("listSystemFontFamilies：过滤超长脏族名（目录名可注入超长�
 		writeFileSync(join(userFonts, `${"x".repeat(120)}.ttf`), "not a real font");
 		writeFileSync(join(userFonts, "Ok Short.ttf"), "not a real font");
 
-		const result = await withPlatform("linux", async () => loadSystemFonts(home).listSystemFontFamilies());
+		const result = await withPlatform("linux", async () => loadSystemFonts(home).listSystemFontFamilies({ linuxSystemDirs: [] }));
 		assert.deepEqual([...result], ["Ok Short"]);
 	} finally {
 		rmSync(home, { recursive: true, force: true });

@@ -25,7 +25,8 @@ const TRASH_CALLERS = [
 	["main/git/WorktreeService.ts", "git:worktree-remove"],
 	["main/ipc/backgroundsIpc.ts", "backgrounds:cleanup"],
 	["main/ipc/backgroundsIpc.ts", "backgrounds:remove"],
-	["main/ipc/scratchPadIpc.ts", "scratchPad:delete"],
+	// 回收站调用已收进域服务（桌面 IPC 与 Web 路由共用同一边界），契约跟着实现位置走。
+	["main/scratchPad/ScratchPadService.ts", "scratchPad:delete"],
 	["main/projects/ProjectResourceManager.ts", "projects:delete-skill"],
 	["main/projects/ProjectResourceManager.ts", "projects:delete-extension"],
 	["main/prompts/PromptManager.ts", "prompts:delete"],

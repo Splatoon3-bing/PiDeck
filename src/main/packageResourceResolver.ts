@@ -280,8 +280,11 @@ export function readPackageVersion(startPath: string): string | undefined {
 			if (isRecord(parsed) && typeof parsed.version === "string" && parsed.version.trim()) return parsed.version.trim();
 			return undefined;
 		} catch (error) {
-			// 文件不存在才向上找；读不了/解析失败视为「该包无版本」，不再向上串。
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+			// 文件不存在（ENOENT）或起点本身是资源文件而非目录（ENOTDIR，join 后
+			// `file/package.json` 读不动）才向上找；其余读不了/解析失败视为「该包无版本」，
+			// 不再向上串。
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
 		}
 		const parent = dirname(current);
 		if (parent === current) return undefined;

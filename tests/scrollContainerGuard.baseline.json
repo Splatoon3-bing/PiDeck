@@ -1,4 +1,20 @@
 {
-	"count": 0,
-	"entries": []
+	"count": 15,
+	"entries": [
+		"src/renderer/src/web/WebAgentPanel.tsx :: <DialogContent className=\"max-h-[85dvh] overflow-y-auto\">",
+		"src/renderer/src/web/WebAgentPanel.tsx :: {output ? <pre className=\"mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-caption\">{output}</pre> : null}",
+		"src/renderer/src/web/WebAutomationPanel.tsx :: <div className=\"flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5\">",
+		"src/renderer/src/web/WebAutomationPanel.tsx :: <section className=\"min-h-0 flex-1 overflow-y-auto\">",
+		"src/renderer/src/web/WebGitBranchBar.tsx :: <DropdownMenuContent align=\"start\" className=\"max-h-80 w-56 overflow-y-auto\">",
+		"src/renderer/src/web/WebGitPanel.tsx :: <pre className=\"max-h-56 overflow-auto rounded bg-muted/50 p-1.5 text-micro leading-relaxed whitespace-pre-wrap\">{diff.data.modifiedContent || \"—\"}</pre>",
+		"src/renderer/src/web/WebGitPanel.tsx :: <pre className=\"max-h-56 overflow-auto rounded bg-muted/50 p-1.5 text-micro leading-relaxed whitespace-pre-wrap\">{diff.data.originalContent || \"—\"}</pre>",
+		"src/renderer/src/web/WebNoticeCenter.tsx :: <div className=\"min-h-0 flex-1 overflow-y-auto\">",
+		"src/renderer/src/web/WebSplitPane.tsx :: <div className=\"min-h-0 flex-1 overflow-y-auto px-2.5 py-2\">",
+		"src/renderer/src/web/WebStatusPanel.tsx :: <div className=\"min-h-0 flex-1 overflow-y-auto\">",
+		"src/renderer/src/web/WebWorkspaceDrawer.tsx :: <div className=\"min-h-0 flex-1 overflow-y-auto px-2.5 py-2\"> #2",
+		"src/renderer/src/web/WebWorkspaceDrawer.tsx :: <div className={cn(\"min-h-0 flex-1 overflow-y-auto px-2.5 py-2\", panel !== \"agents\" && \"hidden\")}>",
+		"src/renderer/src/web/WebWorkspaceDrawer.tsx :: <div className={cn(\"min-h-0 flex-1 overflow-y-auto px-2.5 py-2\", panel !== \"automation\" && \"hidden\")}>",
+		"src/renderer/src/web/WebWorkspaceDrawer.tsx :: <div className={cn(\"min-h-0 flex-1 overflow-y-auto px-2.5 py-2\", panel !== \"favorites\" && \"hidden\")}>",
+		"src/renderer/src/web/WebWorkspaceDrawer.tsx :: <div className={cn(\"min-h-0 flex-1 overflow-y-auto px-2.5 py-2\", panel !== \"status\" && \"hidden\")}>"
+	]
 }

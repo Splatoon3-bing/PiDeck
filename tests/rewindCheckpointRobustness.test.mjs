@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
 
-import { createCheckpoint } from "../src/main/rewind/checkpointCore.ts";
+import { createCheckpoint, isGitWorkTree } from "../src/main/rewind/checkpointCore.ts";
 // coordinator 用构造函数参数属性（private readonly host），Node 的 TS 剥离不支持，走 tsc 转换
 const { RewindCheckpointCoordinator } = loadTsCommonJs("src/main/pi/RewindCheckpointCoordinator.ts");
 
@@ -143,6 +143,46 @@ test("#373 非 git 目录：首次失败说明原因，后续轮次不再刷屏"
 	await coordinator.runCheckpoint("a1", freshState(), "bash", 4);
 	assert.equal(warns.length, firstRound, "冷却期内不应再写日志");
 	assert.equal(coordinator.healthForRoot(dir)?.consecutiveFailures, 1, "跳过时不应累计失败次数");
+});
+
+test("#373 中文 locale 下同样判为 no-git（不再靠英文错误文案）", async (t) => {
+	// 中文环境的 git 输出是 `fatal: 不是 Git 仓库（或者任何父目录）：.git`，
+	// 改前用 /not a git repository/i 匹配错误串 → 永远失配 → 冷却失效，每个工具动作重跑一轮
+	// 注定失败的快照并写一条 warn（实测单日 382 条，0 条 checkpoint disabled）。
+	const dir = mkdtempSync(join(tmpdir(), "rewind-nogit-zh-"));
+	t.after(() => rmRepoRetry(dir));
+	const before = { LANG: process.env.LANG, LC_ALL: process.env.LC_ALL };
+	process.env.LANG = "zh_CN.UTF-8";
+	process.env.LC_ALL = "zh_CN.UTF-8";
+	t.after(() => {
+		for (const [key, value] of Object.entries(before)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	});
+
+	// 判据只看 git 退出码 + stdout，不受 locale 影响
+	assert.equal(await isGitWorkTree(dir), false, "非 git 目录必须判 false");
+
+	const { coordinator, warns } = makeCoordinator(dir);
+	await coordinator.runCheckpoint("zh1", freshState(), "bash", 1);
+	assert.equal(warns.length, 1, "首次失败应该有一条说明");
+	assert.equal(coordinator.healthForRoot(dir)?.lastErrorKind, "no-git", "中文 locale 下也必须归到 no-git");
+	assert.equal(coordinator.healthForRoot(dir)?.consecutiveFailures, 1);
+
+	await coordinator.runCheckpoint("zh1", freshState(), "bash", 2);
+	await coordinator.runCheckpoint("zh1", freshState(), "bash", 3);
+	assert.equal(warns.length, 1, "冷却期内不应再刷屏");
+	assert.equal(coordinator.healthForRoot(dir)?.consecutiveFailures, 1, "跳过时不应累计失败次数");
+});
+
+test("#373 工作树探测：git 仓库为 true，普通目录为 false", async (t) => {
+	const { dir } = makeRepo();
+	t.after(() => rmRepoRetry(dir));
+	assert.equal(await isGitWorkTree(dir), true);
+	const plain = mkdtempSync(join(tmpdir(), "rewind-plain-"));
+	t.after(() => rmRepoRetry(plain));
+	assert.equal(await isGitWorkTree(plain), false);
 });
 
 test("#373 公开调度入口：同 root 的不同 agent 共享冷却，只告警一次", async (t) => {

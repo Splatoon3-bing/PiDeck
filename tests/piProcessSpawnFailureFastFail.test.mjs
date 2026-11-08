@@ -195,6 +195,42 @@ test("describeSpawnFailure 只对可归因的 errno 给结论", () => {
 	);
 });
 
+test("spawn ENOENT：目录只是瞬时不就绪时不许说「目录不存在」", () => {
+	const base = {
+		error: { code: "ENOENT", message: "spawn /usr/local/bin/pi ENOENT" },
+		spawnedCommand: "/usr/local/bin/pi",
+		piCommand: "/usr/local/bin/pi",
+		cwd: "/home/bing/PiDeck",
+		cwdExists: true,
+		cwdIsDirectory: true,
+		piCommandExists: true,
+		isWindows: false,
+	};
+
+	// 实测现场：下发瞬间探不到 cwd，同一分钟同盘另一个项目却正常启动，事后目录完好。
+	const transient = describeSpawnFailure({ ...base, cwdMissingAtSpawn: true });
+	assert.match(transient, /启动瞬间工作目录不可用/);
+	assert.match(transient, /现在已存在/);
+	assert.doesNotMatch(transient, /项目工作目录不存在/);
+	assert.match(transient, /ENOENT/, "原始 errno 文本必须保留可检索");
+
+	// 目录现在也探不到、但不是 ENOENT（没权限/句柄耗尽）：不能归到「路径被删」。
+	const denied = describeSpawnFailure({
+		...base,
+		cwdExists: false,
+		cwdIsDirectory: false,
+		cwdMissingAtSpawn: true,
+		cwdProbeErrorCode: "EACCES",
+	});
+	assert.match(denied, /工作目录无法访问/);
+	assert.match(denied, /EACCES/);
+	assert.doesNotMatch(denied, /项目工作目录不存在/);
+
+	// 两次探测一致地说不存在：保持原有的「目录被删/未挂载」结论。
+	const gone = describeSpawnFailure({ ...base, cwdExists: false, cwdIsDirectory: false, cwdMissingAtSpawn: true });
+	assert.match(gone, /项目工作目录不存在/);
+});
+
 test("spawn 失败不触发扩展回退，并给出原因（扩展尚未加载）", () => {
 	const input = {
 		alreadyNoExtensions: false,

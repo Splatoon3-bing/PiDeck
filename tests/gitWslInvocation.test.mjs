@@ -173,7 +173,7 @@ test("planGitSpawn：宿主分支保留可执行文件/参数/cwd，WSL 分支�
 	const native = gitWsl.planGitSpawn(["status", "--porcelain"], { cwd: "C:\\proj", nativeCommand: CUSTOM_GIT });
 	assert.deepEqual(plain(native), { command: CUSTOM_GIT, args: ["status", "--porcelain"], cwd: "C:\\proj", target: null, display: `${CUSTOM_GIT} status --porcelain` });
 
-	const wsl = gitWsl.planGitSpawn(["status", "--porcelain", "-z", "--", "."], { cwd: UNC_REPO, nativeCommand: CUSTOM_GIT, wslCommand: WSL_EXE, env: { GIT_INDEX_FILE: "C:/tmp/index" } });
+	const wsl = gitWsl.planGitSpawn(["status", "--porcelain", "-z", "--", "."], { cwd: UNC_REPO, platform: "win32", nativeCommand: CUSTOM_GIT, wslCommand: WSL_EXE, env: { GIT_INDEX_FILE: "C:/tmp/index" } });
 	assert.equal(wsl.command, WSL_EXE);
 	assert.equal(wsl.target.distro, "Debian");
 	assert.equal(wsl.cwd, tmpdir());
@@ -202,7 +202,7 @@ test("execGit：宿主项目仍 spawn 用户配置的 git，并把显式 env 叠
 test("execGit：WSL 项目经 wsl.exe 在发行版内执行，stdout 的 NUL 原样保留", async () => {
 	const fake = fakeSpawn({ stdout: Buffer.from("a.ts\0b.ts\0", "utf8") });
 	spawnHandler = fake.handler;
-	const { stdout } = await execGit(["status", "--porcelain", "-z", "--", "."], { cwd: UNC_REPO });
+	const { stdout } = await execGit(["status", "--porcelain", "-z", "--", "."], { cwd: UNC_REPO, platform: "win32" });
 	assert.equal(stdout, "a.ts\0b.ts\0");
 	assert.equal(fake.calls.length, 1);
 	assert.equal(fake.calls[0].command, WSL_EXE);
@@ -215,7 +215,7 @@ test("execGit：WSL 分支失败时把 UTF-16LE 的 wsl.exe 报错解码进错�
 	const failing = fakeSpawn({ stderr: Buffer.from("There is no distribution with the supplied name.", "utf16le"), code: 1 });
 	spawnHandler = failing.handler;
 	await assert.rejects(
-		() => execGit(["rev-parse", "HEAD"], { cwd: UNC_REPO }),
+		() => execGit(["rev-parse", "HEAD"], { cwd: UNC_REPO, platform: "win32" }),
 		(error) => {
 			assert.match(error.message, /^Command failed: .*wsl\.exe -d Debian git rev-parse HEAD\n/);
 			assert.match(error.message, /There is no distribution with the supplied name\./);
@@ -227,13 +227,13 @@ test("execGit：WSL 分支失败时把 UTF-16LE 的 wsl.exe 报错解码进错�
 test("execGit：WSL 分支的 cd 守卫失败（exit 90）消息可读", async () => {
 	const failing = fakeSpawn({ stderr: Buffer.from("pideck: cannot change directory to /home/dev/gone\n", "utf8"), code: 90 });
 	spawnHandler = failing.handler;
-	await assert.rejects(() => execGit(["status"], { cwd: "\\\\wsl.localhost\\Debian\\home\\dev\\gone" }), /pideck: cannot change directory to \/home\/dev\/gone/);
+	await assert.rejects(() => execGit(["status"], { cwd: "\\\\wsl.localhost\\Debian\\home\\dev\\gone", platform: "win32" }), /pideck: cannot change directory to \/home\/dev\/gone/);
 });
 
 test("runGitCommand：WSL 分支把 stdin 转给 wsl.exe（commit-tree / cat-file --batch 依赖）", async () => {
 	const fake = fakeSpawn({ stdout: "0".repeat(40) + "\n" });
 	spawnHandler = fake.handler;
-	const { stdout } = await runGitCommand(["commit-tree", "abc123"], { cwd: UNC_REPO, input: "pi-rewind:turn-1", env: { GIT_AUTHOR_NAME: "pi-rewind" } });
+	const { stdout } = await runGitCommand(["commit-tree", "abc123"], { cwd: UNC_REPO, platform: "win32", input: "pi-rewind:turn-1", env: { GIT_AUTHOR_NAME: "pi-rewind" } });
 	assert.equal(stdout, "0".repeat(40) + "\n");
 	assert.deepEqual(fake.calls[0].args, expectedWslArgs("Debian", "/home/dev/proj", ["commit-tree", "abc123"], ["GIT_AUTHOR_NAME=pi-rewind"]));
 	assert.deepEqual(fake.calls[0].options.stdio, ["pipe", "pipe", "pipe"]);

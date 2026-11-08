@@ -46,5 +46,8 @@ test("Web 选择器同样用保存名称显示，identity 信息在弹层行内�
 	assert.match(source, /const pillLabel\s*=\s*selectedName \?\? t\("web\.model"\);/);
 	// 窗口化后模型行拆成独立组件 ModelRow(props)，不再闭包捕获 item
 	assert.match(source, /const name = resolveModelDisplayName\(props\.item\.name, props\.item\.id\);/);
-	assert.match(source, /\{name\}[\s\S]{0,120}\{props\.item\.id\}/);
+	// 2026-11 视觉返工：行改成两行式——首行名称（+ 能力徽标），次行 `provider · id` 与上下文窗口。
+	// identity 仍在行内可见，只是从「与名称同行」换到次行，避免长名称与 id 挤成一团。
+	assert.match(source, /\{name\}/, "行首仍必须渲染保存名称");
+	assert.match(source, /\{props\.item\.provider\} · \{props\.item\.id\}/, "provider 与 id 同行可见");
 });

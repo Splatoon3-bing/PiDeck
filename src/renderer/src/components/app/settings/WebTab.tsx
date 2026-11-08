@@ -230,6 +230,9 @@ export const WebTab = memo(function WebTab(props: WebTabProps) {
 				</div>
 			</SettingRow>
 
+			{/* Web 终端开关：默认关闭，且不进 Web 设置白名单（只有桌面能开，见 T6 安全评审 C1） */}
+			<SettingSwitchRow anchor="web-terminal-enabled" title={t("settings.webTerminalEnabled")} description={t("settings.webTerminalEnabledDesc")} checked={draft.webTerminalEnabled} onChange={(checked) => updateDraft({ webTerminalEnabled: checked })} />
+
 			{/* Token 鉴权开关 */}
 			<SettingSwitchRow anchor="web-use-token-auth" title={t("settings.webUseTokenAuth")} description={t("settings.webUseTokenAuthDesc")} checked={draft.webServiceRequiresAuth} onChange={(checked) => updateDraft({ webServiceRequiresAuth: checked })} />
 			{!draft.webServiceRequiresAuth && isPublicBindHost(draft.webServiceHost) && <p className="-mt-1.5 ml-1 text-caption text-warning">{t("settings.webAuthOffWarning")}</p>}

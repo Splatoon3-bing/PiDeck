@@ -1774,8 +1774,9 @@ export function App() {
 			if (!activeProjectId && next.length > 0) setActiveProjectId(next[0].id);
 		},
 		onSettingsApplied: (next: AppSettings) => {
+			// 广播路径只服务「设置从主进程内部被改写」（当前是 Web 端 /api/settings 白名单写入）：
+			// 白名单不含标题栏类启动项，不需要「重启生效」提示；弹了反而是误导（改个主题提示重启）。
 			setSettings(next);
-			showToast(t("settings.restartNotice"));
 		},
 		onOpenInBrowser: openInBrowser,
 		onTrustRequest: overlays.setTrustRequest,

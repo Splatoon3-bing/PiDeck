@@ -118,8 +118,12 @@ test("401 response broadcasts auth-failed event exactly once until a success res
 test("WebChatApp renders auth-expired banner wired to the broadcast event", () => {
 	const app = readFileSync("src/renderer/src/web/WebChatApp.tsx", "utf8");
 	assert.match(app, /addEventListener\("pideck-web-auth-failed"/);
-	assert.match(app, /web\.authExpired/);
-	assert.match(app, /web\.authExpiredRetry/);
+	// 横幅组件已抽到 WebComposerBanner（组合根只挂 <WebAuthExpiredBanner />）：
+	// 文案断言跟着实现位置走，仍钉住“需重新扫码/重试”这条用户可见提示。
+	assert.match(app, /<WebAuthExpiredBanner \/>/);
+	const banner = readFileSync("src/renderer/src/web/WebComposerBanner.tsx", "utf8");
+	assert.match(banner, /web\.authExpired/);
+	assert.match(banner, /web\.authExpiredRetry/);
 	const zhCn = readFileSync("src/renderer/src/i18n/rendererCopy.zh-CN.ts", "utf8");
 	const enUs = readFileSync("src/renderer/src/i18n/rendererCopy.en-US.ts", "utf8");
 	assert.match(zhCn, /"web\.authExpired"/);

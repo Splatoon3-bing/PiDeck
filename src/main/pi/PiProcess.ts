@@ -111,12 +111,18 @@ function estimateArgChars(args: readonly string[]): number {
  *
  * 只用于「spawn 失败后还原真实原因」（见 piSpawnFailure），绝不据此拦截启动：
  * WSL 的 \\wsl$\... 宿主路径在 Windows 侧 stat 可能失败，但 spawn 是正常的。
+ *
+ * errorCode 必须留下来：吞掉异常会让「没权限 / 句柄耗尽（EACCES/EMFILE）」
+ * 和「目录真的没了（ENOENT）」看起来一模一样，故障现场只剩一句「目录不存在」可猜。
  */
-function readCwdState(cwd: string): { exists: boolean; isDirectory: boolean } {
+type CwdProbe = { exists: boolean; isDirectory: boolean; errorCode?: string };
+
+function readCwdState(cwd: string): CwdProbe {
 	try {
 		return { exists: true, isDirectory: statSync(cwd).isDirectory() };
-	} catch {
-		return { exists: false, isDirectory: false };
+	} catch (error) {
+		const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : undefined;
+		return { exists: false, isDirectory: false, errorCode: code };
 	}
 }
 
@@ -211,6 +217,8 @@ export class PiProcess extends EventEmitter {
 		 */
 		spawnFailed?: boolean;
 		cwdMissing?: boolean;
+		/** spawn 下发瞬间探测到工作目录不可用，但错误到达时已恢复（不是项目路径配错）。 */
+		cwdMissingAtSpawn?: boolean;
 		/**
 		 * Windows 启动通道：node 直启（.cmd 垫片已还原成 node + JS 入口）或 cmd.exe 回退 + 原因。
 		 * 这条以前是静默的，用户看到命令行里有 cmd.exe 会以为「改 node 启动没生效」。
@@ -262,6 +270,7 @@ export class PiProcess extends EventEmitter {
 		versionCheckProbed?: boolean;
 		spawnFailed?: boolean;
 		cwdMissing?: boolean;
+		cwdMissingAtSpawn?: boolean;
 		launch?: { channel: "node-direct" | "cmd-shim"; reason?: string; entry?: string };
 		blockedExtensions?: string[];
 		/** 白名单因超预算被跳过（dev 的原始过滤规则下恒为空，保留给 AgentManager 的诊断形状）。 */
@@ -568,17 +577,24 @@ export class PiProcess extends EventEmitter {
 					// WSL 的工作目录在 distro 内，Windows 侧 stat 宿主路径（\\wsl$\...）不可靠：
 					// 探不到时不能反过来说「目录不存在」，否则会把 wsl.exe 自身的问题误报成项目路径问题。
 					const cwdFactForDiagnosis = isWslCommand ? { exists: true, isDirectory: true } : cwdFact;
+					// spawn 前的快照只代表「下发瞬间」；错误到达时再探一次，两次不一致时说明目录只是
+					// 瞬时不就绪，不能把「目录不存在」当既定事实写进报错（实测：同一分钟同盘的另一个
+					// 项目能正常启动，只有 /home/bing/PiDeck 连续失败 5 次，事后目录完好）。
+					const cwdAtError: CwdProbe = isWslCommand ? { exists: true, isDirectory: true } : readCwdState(spawnCwd);
 					if (this.diagnostics) {
 						this.diagnostics.spawnFailed = true;
-						this.diagnostics.cwdMissing = !cwdFactForDiagnosis.exists || !cwdFactForDiagnosis.isDirectory;
+						this.diagnostics.cwdMissing = !cwdAtError.exists || !cwdAtError.isDirectory;
+						this.diagnostics.cwdMissingAtSpawn = !cwdFactForDiagnosis.exists || !cwdFactForDiagnosis.isDirectory;
 					}
 					const { error: described, described: hasReason } = createSpawnFailureError({
 						error,
 						spawnedCommand: invocation.command,
 						piCommand: command,
 						cwd: spawnCwd,
-						cwdExists: cwdFactForDiagnosis.exists,
-						cwdIsDirectory: cwdFactForDiagnosis.isDirectory,
+						cwdExists: cwdAtError.exists,
+						cwdIsDirectory: cwdAtError.isDirectory,
+						cwdMissingAtSpawn: !cwdFactForDiagnosis.exists || !cwdFactForDiagnosis.isDirectory,
+						cwdProbeErrorCode: cwdAtError.errorCode ?? cwdFactForDiagnosis.errorCode,
 						// WSL 的 pi 在 distro 内，Windows 侧 existsSync 只会返回 false，不能据此说路径失效。
 						piCommandExists: isWslCommand ? true : existsSync(command),
 						isWindows: process.platform === "win32",

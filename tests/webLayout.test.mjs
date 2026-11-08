@@ -10,6 +10,9 @@ const webChatApp = readFileSync("src/renderer/src/web/WebChatApp.tsx", "utf8");
 const webSessionStrips = readFileSync("src/renderer/src/web/WebSessionStrips.tsx", "utf8");
 const webTimeline = readFileSync("src/renderer/src/web/WebTimeline.tsx", "utf8");
 const webDshToolsPanel = readFileSync("src/renderer/src/web/WebDshToolsPanel.tsx", "utf8");
+const webSessionDialogs = readFileSync("src/renderer/src/web/WebSessionDialogs.tsx", "utf8");
+const webSettings = readFileSync("src/renderer/src/web/useWebSettings.ts", "utf8");
+const webComposerBanner = readFileSync("src/renderer/src/web/WebComposerBanner.tsx", "utf8");
 
 test("Web shell keeps sidebar and chat pane in a horizontal split", () => {
 	assert.match(webCss, /\.app\.wechat-shell\s*\{[\s\S]*?flex-direction:\s*row;/, "the desktop shell defaults to a vertical layout, so Web must explicitly restore the horizontal split");
@@ -23,9 +26,10 @@ test("Web project rows can collapse after the active session is revealed", () =>
 	assert.match(webSidebar, /const expanded = searching \|\| expandedProjects\.has\(project\.id\)/);
 });
 
-test("Web model picker lives in a searchable bottom sheet, header stays one row", () => {
-	// 模型选择器已从头部的 Command 弹层迁到 composer 的 WebBottomSheet（第三批瘦身）：
-	// 搜索输入在 sheet 内，header 不再携带 CommandInput。
+test("Web model picker lives in a responsive local picker, header stays one row", () => {
+	// 手机保持 BottomSheet；桌面锚定 composer 按钮弹局部 Popover，不再居中盖住整页。
+	assert.match(webModelSheet, /WebPickerSurface/);
+	assert.match(readFileSync("src/renderer/src/web/WebPickerSurface.tsx", "utf8"), /side="top"/);
 	assert.match(webModelSheet, /placeholder=\{t\("web\.modelSearch"\)\}/);
 	assert.match(webModelSheet, /t\("web\.modelEmpty"\)/);
 	assert.doesNotMatch(webHeader, /CommandInput/);
@@ -118,8 +122,8 @@ test("Web timeline groups assistant messages into collapsible execution folds", 
 	const turnCopyUses = turnSource.match(/web\.msgCopy/g) ?? [];
 	assert.equal(turnCopyUses.length, 1, "copy/share actions belong to the final reply of a turn only");
 	assert.match(turnSource, /!props\.isStreaming && turn\.finalText/, "actions render only after the final reply settles");
-	// 流式时过程组默认展开、结束回落折叠；手动开合优先。
-	assert.match(webTimeline, /manualOpen \?\? props\.isStreaming/);
+	// 流式时过程组默认展开、结束回落折叠；手动开合优先。autoExpandProcess=false 是可选的禁止自动展开开关。
+	assert.match(webTimeline, /manualOpen \?\? \(props\.isStreaming && props\.autoExpandProcess !== false\)/);
 	// 过程组样式：左导轨缩进明细存在（css）。
 	assert.match(webCss, /\.web-app \.execution-fold-details\s*\{[\s\S]*?border-left:/);
 });
@@ -277,7 +281,9 @@ test("Web destructive confirmations both use AlertDialog, never window.confirm",
 	assert.match(webSidebar, /AlertDialog open=\{pendingDeleteProject != null\}/);
 	assert.match(webSidebar, /t\("web\.deleteProjectConfirmTitle"\)/);
 	assert.match(webSidebar, /t\("web\.deleteProjectConfirm"\)/);
-	assert.match(webChatApp, /AlertDialog open=\{deleteConfirmId != null\}/);
+	// 会话删除确认已拆到 WebSessionDialogs（组合根只传 deleteConfirmId 并挂载）; 两份删除确认都必须走 AlertDialog。
+	assert.match(webChatApp, /<WebSessionDialogs[\s\S]*?deleteConfirmId=\{deleteConfirmId\}/);
+	assert.match(webSessionDialogs, /AlertDialog open=\{props\.deleteConfirmId != null\}/);
 });
 
 // 回归（Web 走查 #8 → 2026-10 修正）：侧栏「更多会话」一度一次渲染 407 行（258ms、DOM 4363 节点），
@@ -317,7 +323,8 @@ test("Web theme cycle always produces a visible change", () => {
 	const webTheme = readFileSync("src/renderer/src/web/webTheme.ts", "utf8");
 	assert.match(webTheme, /export function nextWebTheme\(pref: WebThemePreference, resolved: ResolvedWebTheme\): WebThemePreference/);
 	assert.match(webTheme, /return resolved === "dark" \? "light" : "dark";/);
-	assert.match(webChatApp, /nextWebTheme\(themePreference, resolvedTheme\)/);
+	// 主题循环的求值已收入 useWebSettings（组合根只消费 cycleTheme/toggleTheme）。
+	assert.match(webSettings, /nextWebTheme\(themePreference, resolvedTheme\)/);
 });
 
 // 回归（Web 走查）：暗色只能从 ⋮ 溢出菜单里找，触屏用户当它不存在。
@@ -333,7 +340,7 @@ test("Web header exposes a visible one-tap light/dark toggle", () => {
 	assert.ok(toggleIndex < menuTriggerIndex, "theme toggle must sit in the visible action row, not inside the overflow menu");
 	assert.match(webHeader, /aria-label=\{themeToggleLabel\}/);
 	assert.match(webHeader, /props\.resolvedTheme === "dark" \? "web\.themeSwitchToLight" : "web\.themeSwitchToDark"/);
-	assert.match(webChatApp, /toggleWebTheme\(themePreference, resolvedTheme\)/);
+	assert.match(webSettings, /toggleWebTheme\(themePreference, resolvedTheme\)/);
 	assert.match(webChatApp, /onToggleTheme=\{toggleTheme\}/);
 	assert.match(webMain, /bootstrapWebTheme\(\);/);
 	assert.doesNotMatch(webMain, /prefers-color-scheme/, "web-main must not own a second theme listener");
@@ -421,5 +428,7 @@ test("Web strips above the composer share the composer reading width", () => {
 	assert.ok(aboveRule.length > 0, "web.css must cap the strips above the composer");
 	assert.match(aboveRule.slice(0, 200), /width:\s*100%;[\s\S]*?max-width:\s*776px;[\s\S]*?margin-inline:\s*auto;/, "the strips need the same 776px centered column as .composer > *");
 	assert.match(webSessionStrips, /className="composer-above\b/, "子代理/任务清单条必须挂 composer-above，否则会再次铺满 chat-pane");
-	assert.match(webChatApp, /className="composer-above\b/, "错误/待答横幅与输入框同宽，否则会在输入卡上方横穿整屏");
+	// 错误/待答横幅已拆到 WebComposerBanner：同宽契约跟着组件走，组合根只需确认挂载的是该组件。
+	assert.match(webComposerBanner, /className="composer-above\b/, "错误/待答横幅与输入框同宽，否则会在输入卡上方横穿整屏");
+	assert.match(webChatApp, /<WebComposerBanner\b/);
 });

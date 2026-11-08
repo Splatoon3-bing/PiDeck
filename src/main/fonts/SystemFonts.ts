@@ -247,7 +247,10 @@ async function collectWindowsFamilies(into: Set<string>): Promise<void> {
 }
 
 /** Linux：fontconfig 的 `fc-list` 是权威来源（含字体别名与用户目录）。 */
-async function collectLinuxFamilies(into: Set<string>): Promise<void> {
+/** Linux 系统级字体目录（可注入：测试注入空数组即可隔离开发机真实字体）。 */
+const LINUX_SYSTEM_FONT_DIRS = ["/usr/share/fonts", "/usr/local/share/fonts"] as const;
+
+async function collectLinuxFamilies(into: Set<string>, systemDirs: readonly string[] = LINUX_SYSTEM_FONT_DIRS): Promise<void> {
 	try {
 		const { stdout } = await execFileAsync("fc-list", [":", "family"], { timeout: 8000, maxBuffer: 8 * 1024 * 1024 });
 		for (const line of stdout.split(/\r?\n/)) {
@@ -260,8 +263,7 @@ async function collectLinuxFamilies(into: Set<string>): Promise<void> {
 	} catch {
 		// 无 fc-list（精简发行版）：走目录兜底
 	}
-	await readFontDirectory("/usr/share/fonts", into);
-	await readFontDirectory("/usr/local/share/fonts", into);
+	for (const dir of systemDirs) await readFontDirectory(dir, into);
 	await readFontDirectory(join(app.getPath("home"), ".local", "share", "fonts"), into);
 	await readFontDirectory(join(app.getPath("home"), ".fonts"), into);
 }
@@ -272,12 +274,12 @@ async function collectLinuxFamilies(into: Set<string>): Promise<void> {
  */
 let cachedFamilies: string[] | null = null;
 
-export async function listSystemFontFamilies(options: { refresh?: boolean } = {}): Promise<string[]> {
+export async function listSystemFontFamilies(options: { refresh?: boolean; linuxSystemDirs?: readonly string[] } = {}): Promise<string[]> {
 	if (cachedFamilies && !options.refresh) return cachedFamilies;
 	const families = new Set<string>();
 	if (process.platform === "darwin") await collectMacFamilies(families);
 	else if (process.platform === "win32") await collectWindowsFamilies(families);
-	else await collectLinuxFamilies(families);
+	else await collectLinuxFamilies(families, options.linuxSystemDirs);
 	cachedFamilies = [...families]
 		.filter((name) => name.length > 0 && name.length <= 80)
 		// 过滤系统内部字体：macOS 用 `.` 前缀标记私有族名（`.LastResort` 每个码位都是

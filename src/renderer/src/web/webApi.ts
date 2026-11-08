@@ -12,7 +12,13 @@ import type { AvailableModel, AgentBackend, ChatMessage, SessionCommandResult, S
 import type { CommitEntry, GitBranchInfo, GitResourceGroups, ImageContent, PiExtensionSummary, PiSkillLocation, PiSkillSummary, PiSubagentEntry, YaoPromptCategory, ProviderUsageResult, UsageProbeBackend } from "../../../shared/types";
 import type { AgentUiResponse } from "../../../shared/types";
 import type { WebSecurityState } from "../../../shared/types";
+import type { SafeWebSettings, WebWritableSettings } from "../../../shared/types";
+import type { AutomationCronPreview, CreateAutomationTaskInput, UpdateAutomationTaskInput, WebAutomationRun, WebAutomationSnapshot, WebAutomationTask } from "../../../shared/types";
 import type { WebContextUsage, WebFileNodeLite, WebState } from "./webTypes";
+import type { AgentInvokeInput, AgentProfile } from "../../../shared/types/agentProfile";
+import type { HostPluginPermission } from "../../../shared/types/hostPlugin";
+import type { WebAgentSnapshot } from "../../../main/web/WebAgentRoutes";
+import type { FavoriteEntry } from "../../../shared/types/favorites";
 
 // Web 服务令牌：与 browserApi 同型（同一 localStorage key），从二维码/分享链接的 ?token= 读取一次并持久化。
 // 之后所有请求统一带 Authorization: Bearer；环回绑定服务端不校验，无令牌时照常工作。
@@ -28,6 +34,11 @@ if (typeof window !== "undefined") {
 /** 请求注入用的鉴权头；无令牌时返回空对象（环回绑定不校验，省略即可）。 */
 export function getWebAuthHeaders(): Record<string, string> {
 	return webToken ? { authorization: `Bearer ${webToken}` } : {};
+}
+
+/** 生图产物地址：`<img>` 不能带 Authorization，GET 走 `?token=`（与 SSE 同一套令牌链）。 */
+export function webImageBlobUrl(ref: string): string {
+	return `/api/imagegen/blob/${encodeURIComponent(ref)}${webToken ? `?token=${encodeURIComponent(webToken)}` : ""}`;
 }
 
 /** 当前令牌（SSE 类连接用：EventSource 无法携带 Authorization header，只能拼 query）。 */
@@ -287,9 +298,14 @@ export function chatMessagesToUiMessages(messages: ChatMessage[]): UIMessage[] {
 		}
 		// P2：历史用户图片 → file part（data URL）。超大数据防护：单张 >4MB 直接跳过
 		// （页端已有界，这里只防异常大图拖垮渲染层）。
-		if (role === "user" && Array.isArray(message.images)) {
+		if (Array.isArray(message.images)) {
 			for (const image of message.images) {
-				if (image?.type !== "image" || typeof image.mimeType !== "string" || typeof image.data !== "string") continue;
+				if (image?.type !== "image" || typeof image.mimeType !== "string") continue;
+				// 生图历史只存 ref（base64 不进 JSONL）：展示走主进程 blob 路由，不把字节塞回消息对象。
+				if (typeof image.data !== "string" || !image.data) {
+					if (typeof image.ref === "string" && image.ref) parts.push({ type: "file", mediaType: image.mimeType, url: webImageBlobUrl(image.ref) } as unknown as UIMessage["parts"][number]);
+					continue;
+				}
 				if (image.data.length > 4 * 1024 * 1024) continue;
 				parts.push({ type: "file", mediaType: image.mimeType, data: `data:${image.mimeType};base64,${image.data}` } as unknown as UIMessage["parts"][number]);
 			}
@@ -623,8 +639,11 @@ export class WebFileAccessError extends Error {
 /** 项目外预览的确认态：`confirm` 只把「需确认」降为放行，服务端仍会独立复核策略（deny 不降级）。 */
 export type FileContentOptions = { sessionId?: string; confirmed?: boolean };
 
+/** 文件内容（有界 512KB；二进制/超限时返回结构化标记）。 */
+export type WebFileContent = { content?: string; size?: number; mtimeMs?: number; tooLarge?: boolean; truncated?: boolean; binary?: boolean };
+
 /** P3：文件内容（有界 512KB；二进制/超限时返回结构化标记）。`path` 可为项目内相对路径或项目外绝对路径/`~/x`。 */
-export async function fetchFileContent(projectId: string, path: string, options: FileContentOptions = {}): Promise<{ content?: string; size?: number; tooLarge?: boolean; truncated?: boolean; binary?: boolean }> {
+export async function fetchFileContent(projectId: string, path: string, options: FileContentOptions = {}): Promise<WebFileContent> {
 	const params = new URLSearchParams({ path });
 	if (options.sessionId) params.set("sessionId", options.sessionId);
 	if (options.confirmed) params.set("confirm", "1");
@@ -635,6 +654,216 @@ export async function fetchFileContent(projectId: string, path: string, options:
 		throw new WebFileAccessError(payload?.code ?? `file content ${res.status}`, payload?.message ?? `file content ${res.status}`, payload?.reason);
 	}
 	return (await res.json()) as { content?: string; size?: number; tooLarge?: boolean; truncated?: boolean; binary?: boolean };
+}
+
+/** Web 文件写入错误：code=webError.fileChanged 表示磁盘已被外部修改（可 force 覆盖）。 */
+export class WebFileWriteError extends Error {
+	readonly code: string;
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = "WebFileWriteError";
+		this.code = code;
+	}
+}
+
+/**
+ * 写入项目内文本文件（Web 编辑器）。
+ * expectedMtimeMs 来自最近一次读取，服务端不匹配时回 409，避免静默覆盖外部改动。
+ */
+export async function writeProjectFile(projectId: string, path: string, content: string, options: { expectedMtimeMs?: number; force?: boolean } = {}): Promise<{ mtimeMs: number }> {
+	const res = await apiFetch("/api/file-content", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ projectId, path, content, ...options }),
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { code?: string; message?: string } | null;
+		throw new WebFileWriteError(payload?.code ?? `file write ${res.status}`, payload?.message ?? `file write ${res.status}`);
+	}
+	const payload = (await res.json()) as { mtimeMs?: number };
+	return { mtimeMs: payload.mtimeMs ?? Date.now() };
+}
+
+/** 文件管理错误：code 用于 UI 区分同名/非法名称/越界，不直接把英文错误抛给用户。 */
+export class WebFileOperationError extends Error {
+	readonly code: string;
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = "WebFileOperationError";
+		this.code = code;
+	}
+}
+
+async function postFileEntry(path: string, body: Record<string, unknown>): Promise<void> {
+	const res = await apiFetch(path, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { code?: string; message?: string } | null;
+		throw new WebFileOperationError(payload?.code ?? `file ${res.status}`, payload?.message ?? `file ${res.status}`);
+	}
+}
+
+/** 新建项目内文件/目录（父目录为项目相对路径，空 = 根）。 */
+export function createProjectEntry(projectId: string, dir: string, name: string, kind: "file" | "directory"): Promise<void> {
+	return postFileEntry("/api/files/create", { projectId, dir, name, kind });
+}
+
+/** 重命名项目内文件/目录（只改父目录内的纯文件名）。 */
+export function renameProjectEntry(projectId: string, path: string, newName: string): Promise<void> {
+	return postFileEntry("/api/files/rename", { projectId, path, newName });
+}
+
+/** 删除项目内文件/目录（主进程走系统回收站）。 */
+export function deleteProjectEntry(projectId: string, path: string): Promise<void> {
+	return postFileEntry("/api/files/delete", { projectId, path });
+}
+
+// ── Git 写操作（只开 stage/unstage/commit；discard/reset/push 不在 Web 暴露）──
+
+async function postGitMutation(path: string, body: Record<string, unknown>): Promise<void> {
+	const res = await apiFetch(path, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+		throw new Error(payload?.message ?? payload?.error ?? `git ${res.status}`);
+	}
+}
+
+export function stageGitFiles(projectId: string, paths: string[]): Promise<void> {
+	return postGitMutation("/api/git/stage", { projectId, paths });
+}
+
+export function unstageGitFiles(projectId: string, paths: string[]): Promise<void> {
+	return postGitMutation("/api/git/unstage", { projectId, paths });
+}
+
+export function commitGit(projectId: string, message: string): Promise<void> {
+	return postGitMutation("/api/git/commit", { projectId, message });
+}
+
+/** Git 分支操作错误：code 用于 UI 区分脏工作区/未知分支/非法名称。 */
+export class WebGitOperationError extends Error {
+	readonly code: string;
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = "WebGitOperationError";
+		this.code = code;
+	}
+}
+
+/** 切换/新建分支；返回切换后的分支信息（与 /api/git/status 的 branch 同形）。 */
+export async function checkoutGitBranch(projectId: string, branch: string, options: { create?: boolean; force?: boolean } = {}): Promise<{ current: string | null; branches: string[] }> {
+	const res = await apiFetch("/api/git/checkout", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ projectId, branch, ...options }),
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { code?: string; message?: string } | null;
+		throw new WebGitOperationError(payload?.code ?? `git checkout ${res.status}`, payload?.message ?? `git checkout ${res.status}`);
+	}
+	const payload = (await res.json()) as { current?: string | null; branches?: string[] };
+	return { current: payload.current ?? null, branches: payload.branches ?? [] };
+}
+
+/** fetch 远端（不合并）；push/pull 不在 Web 暴露。 */
+export async function fetchGitRemote(projectId: string): Promise<void> {
+	await postGitMutation("/api/git/fetch", { projectId });
+}
+
+// ── 设置（白名单投影：只在服务端登记的键能读写，未知键 400）──
+
+/** 设置写入失败：code 区分「未知字段」（前端不该发）/「值非法」/服务端错误。 */
+export class WebSettingsError extends Error {
+	readonly code: string;
+	readonly field?: string;
+	constructor(code: string, message: string, field?: string) {
+		super(message);
+		this.name = "WebSettingsError";
+		this.code = code;
+		this.field = field;
+	}
+}
+
+export async function fetchWebSettings(): Promise<SafeWebSettings> {
+	const res = await apiFetch("/api/settings");
+	if (!res.ok) throw new WebSettingsError(`settings ${res.status}`, `settings ${res.status}`);
+	const payload = (await res.json()) as { settings?: SafeWebSettings };
+	if (!payload.settings) throw new WebSettingsError("settings-missing", "settings projection missing");
+	return payload.settings;
+}
+
+/** 写入白名单设置；返回服务端归一化后的完整投影（以它为准回填 UI，不做本地推算）。 */
+export async function updateWebSettings(patch: Partial<WebWritableSettings>): Promise<SafeWebSettings> {
+	const res = await apiFetch("/api/settings", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(patch),
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { code?: string; message?: string; field?: string } | null;
+		throw new WebSettingsError(payload?.code ?? `settings ${res.status}`, payload?.message ?? `settings ${res.status}`, payload?.field);
+	}
+	const payload = (await res.json()) as { settings?: SafeWebSettings };
+	if (!payload.settings) throw new WebSettingsError("settings-missing", "settings projection missing");
+	return payload.settings;
+}
+
+// ── 草稿本（与桌面草稿本同一存储；Web 只传 scope+id，不传宿主路径）──
+
+export type WebScratchPadScope = "global" | "project";
+export type WebScratchPadDraft = { id: string; name: string; createdAt: number; updatedAt: number; scope: WebScratchPadScope };
+
+export function scratchPadQuery(scope: WebScratchPadScope, projectId?: string): string {
+	const params = new URLSearchParams({ scope });
+	if (scope === "project" && projectId) params.set("projectId", projectId);
+	return params.toString();
+}
+
+export async function listScratchPadDrafts(scope: WebScratchPadScope, projectId?: string): Promise<WebScratchPadDraft[]> {
+	const res = await apiFetch(`/api/scratchpad?${scratchPadQuery(scope, projectId)}`);
+	if (!res.ok) throw new Error(`scratchpad list ${res.status}`);
+	const payload = (await res.json()) as { drafts?: WebScratchPadDraft[] };
+	return payload.drafts ?? [];
+}
+
+export async function createScratchPadDraft(scope: WebScratchPadScope, projectId?: string): Promise<WebScratchPadDraft> {
+	const res = await apiFetch("/api/scratchpad/create", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ scope, ...(scope === "project" && projectId ? { projectId } : {}) }),
+	});
+	if (!res.ok) throw new Error(`scratchpad create ${res.status}`);
+	const payload = (await res.json()) as { draft?: WebScratchPadDraft };
+	if (!payload.draft) throw new Error("scratchpad create: missing draft");
+	return payload.draft;
+}
+
+export async function loadScratchPadDraft(scope: WebScratchPadScope, id: string, projectId?: string): Promise<{ content: string; lastEditedAt: number }> {
+	const res = await apiFetch(`/api/scratchpad/${encodeURIComponent(id)}?${scratchPadQuery(scope, projectId)}`);
+	if (!res.ok) throw new Error(`scratchpad load ${res.status}`);
+	return (await res.json()) as { content: string; lastEditedAt: number };
+}
+
+export async function saveScratchPadDraft(scope: WebScratchPadScope, id: string, content: string, projectId?: string): Promise<{ mtimeMs: number }> {
+	const res = await apiFetch(`/api/scratchpad/${encodeURIComponent(id)}/save`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ scope, content, ...(scope === "project" && projectId ? { projectId } : {}) }),
+	});
+	if (!res.ok) throw new Error(`scratchpad save ${res.status}`);
+	return (await res.json()) as { mtimeMs: number };
+}
+
+export async function deleteScratchPadDraft(scope: WebScratchPadScope, id: string, projectId?: string): Promise<void> {
+	const res = await apiFetch(`/api/scratchpad/${encodeURIComponent(id)}?${scratchPadQuery(scope, projectId)}`, { method: "DELETE" });
+	if (!res.ok) throw new Error(`scratchpad delete ${res.status}`);
 }
 
 // ── 会话活动监控 strips（子代理/todo，与桌面端同源数据） ──
@@ -693,4 +922,137 @@ export async function toggleWebExtension(source: string, enabled: boolean, scope
 		body: JSON.stringify({ source, enabled, scope }),
 	});
 	if (!res.ok) throw new Error(`extension toggle ${res.status}`);
+}
+
+/**
+ * 宿主插件只读投影（T14）：服务端只下发 `id/name/version/description/enabled/requiresConsent/permissions`。
+ * 503 = 宿主未装配插件目录（或目录读取失败）→ 返回 null，面板显示不可用且不影响技能/扩展。
+ */
+export type WebHostPluginSummary = { id: string; name: string; version: string; description?: string; enabled: boolean; requiresConsent: boolean; permissions: HostPluginPermission[] };
+
+export async function listWebHostPlugins(): Promise<WebHostPluginSummary[] | null> {
+	const res = await apiFetch("/api/host-plugins");
+	if (res.status === 503) return null;
+	if (!res.ok) throw new Error(`host plugins ${res.status}`);
+	const payload = (await res.json()) as { plugins?: WebHostPluginSummary[] };
+	return payload.plugins ?? [];
+}
+
+// ── 自动化（T8）：白名单投影 + 显式错误码（busy/notFound 由 UI 决定提示） ──
+
+export class WebAutomationError extends Error {
+	readonly code: string;
+	readonly field?: string;
+	constructor(code: string, message: string, field?: string) {
+		super(message);
+		this.name = "WebAutomationError";
+		this.code = code;
+		this.field = field;
+	}
+}
+
+async function automationRequest<T>(path: string, init?: RequestInit): Promise<T> {
+	const res = await apiFetch(path, init);
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { code?: string; message?: string; field?: string } | null;
+		throw new WebAutomationError(payload?.code ?? `automation ${res.status}`, payload?.message ?? `automation ${res.status}`, payload?.field);
+	}
+	return (await res.json()) as T;
+}
+
+function automationPost<T>(path: string, body: unknown): Promise<T> {
+	return automationRequest<T>(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
+export function fetchAutomationSnapshot(taskId?: string): Promise<WebAutomationSnapshot> {
+	const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+	return automationRequest<WebAutomationSnapshot>(`/api/automations${query}`);
+}
+
+export async function createWebAutomation(input: CreateAutomationTaskInput): Promise<WebAutomationTask> {
+	const payload = await automationPost<{ task: WebAutomationTask }>("/api/automations/create", input);
+	return payload.task;
+}
+
+export async function updateWebAutomation(taskId: string, patch: UpdateAutomationTaskInput): Promise<WebAutomationTask> {
+	const payload = await automationPost<{ task: WebAutomationTask }>("/api/automations/update", { taskId, patch });
+	return payload.task;
+}
+
+export async function deleteWebAutomation(taskId: string): Promise<void> {
+	await automationPost<{ ok: boolean }>("/api/automations/delete", { taskId });
+}
+
+export async function runWebAutomation(taskId: string): Promise<WebAutomationRun> {
+	const payload = await automationPost<{ run: WebAutomationRun }>("/api/automations/run", { taskId });
+	return payload.run;
+}
+
+export async function abortWebAutomation(runId: string): Promise<void> {
+	await automationPost<{ ok: boolean }>("/api/automations/abort", { runId });
+}
+
+export async function clearWebAutomationRuns(): Promise<number> {
+	const payload = await automationPost<{ removed: number }>("/api/automations/clear-runs", {});
+	return payload.removed;
+}
+
+export function previewWebAutomationCron(expression: string): Promise<AutomationCronPreview> {
+	return automationRequest<AutomationCronPreview>(`/api/automations/preview-cron?expression=${encodeURIComponent(expression)}`);
+}
+
+// ── 智能体（T9）：systemPrompt 只允许由主进程从预设读取，调用入参不含它 ──
+async function agentRequest<T>(path: string, body?: unknown): Promise<T> {
+	const res = await apiFetch(path, body === undefined ? undefined : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+		throw new Error(payload?.message ?? `agent ${res.status}`);
+	}
+	return (await res.json()) as T;
+}
+export function fetchWebAgents(): Promise<WebAgentSnapshot> {
+	return agentRequest<WebAgentSnapshot>("/api/agents");
+}
+export async function saveWebAgent(input: Record<string, unknown>, agentId?: string): Promise<AgentProfile> {
+	const payload = await agentRequest<{ agent: AgentProfile }>(agentId ? "/api/agents/update" : "/api/agents/create", agentId ? { agentId, patch: input } : input);
+	return payload.agent;
+}
+export function deleteWebAgent(agentId: string): Promise<unknown> {
+	return agentRequest("/api/agents/delete", { agentId });
+}
+export function bindWebAgent(sessionId: string, agentId: string | null): Promise<{ sessionAgentBindings: Record<string, string> }> {
+	return agentRequest("/api/agents/bind-session", { sessionId, agentId });
+}
+export function invokeWebAgent(input: AgentInvokeInput): Promise<{ runId: string }> {
+	return agentRequest("/api/agents/invoke", input);
+}
+export function cancelWebAgent(runId: string): Promise<unknown> {
+	return agentRequest("/api/agents/invoke/cancel", { runId });
+}
+export async function fetchWebFavorites(): Promise<FavoriteEntry[]> {
+	return (await agentRequest<{ entries: FavoriteEntry[] }>("/api/favorites")).entries;
+}
+export function addWebSessionFavorite(sessionId: string): Promise<unknown> {
+	return agentRequest("/api/favorites/add-session", { sessionId });
+}
+export function deleteWebFavorite(favoriteId: string): Promise<unknown> {
+	return agentRequest("/api/favorites/delete", { favoriteId });
+}
+
+// ── 通知 / 公告（T13）：投影只含公告正文与已读 id，notifiedIds 是终端本机簿记不下发 ──
+export type WebAnnouncementState = { items: import("../../../shared/types/announcement").AnnouncementItem[]; readIds: string[]; fetchedAt: number | null; source: "remote" | "cache" | "builtin" };
+export function fetchWebNotices(): Promise<import("../../../shared/types/noticeHistory").NoticeHistoryFileEntry[]> {
+	return agentRequest<{ entries: import("../../../shared/types/noticeHistory").NoticeHistoryFileEntry[] }>("/api/notices").then((payload) => payload.entries);
+}
+export function clearWebNotices(): Promise<unknown> {
+	return agentRequest("/api/notices/clear", {});
+}
+export function fetchWebAnnouncements(): Promise<WebAnnouncementState> {
+	return agentRequest<WebAnnouncementState>("/api/announcements");
+}
+export function markWebAnnouncementRead(id: string): Promise<unknown> {
+	return agentRequest("/api/announcements/mark-read", { id });
+}
+export function markAllWebAnnouncementsRead(): Promise<unknown> {
+	return agentRequest("/api/announcements/mark-all-read", {});
 }

@@ -24,6 +24,11 @@ export type EtagState = {
 	sessions?: ReadonlyArray<unknown>;
 	runtimes?: ReadonlyArray<unknown>;
 	pendingUiRequests?: ReadonlyArray<unknown>;
+	/**
+	 * 构建指纹（web.html 的 hash）：重新构建后必须换 ETag，否则 Web 端拿到 304
+	 * 永远看不到「有新版本」的提示（重建只改指纹，不动会话/项目）。
+	 */
+	buildId?: string;
 };
 
 /** 从任意元素安全取字段（非对象按 undefined 处理，不抛）。 */
@@ -37,7 +42,7 @@ export function canonicalStateString(state: EtagState): string {
 	const projects = (state.projects ?? []).map((p) => [field(p, "id"), field(p, "name"), field(p, "path")].join("\u0001"));
 	const runtimes = (state.runtimes ?? []).map((r) => [field(r, "sessionId"), field(r, "agentId"), field(r, "status"), field(r, "runtimeGeneration")].join("\u0001"));
 	const pending = (state.pendingUiRequests ?? []).map((p) => [field(p, "sessionId"), field(p, "requestId")].join("\u0001"));
-	return [projects.join("\u0002"), sessions.join("\u0002"), runtimes.join("\u0002"), pending.join("\u0002")].join("\u0003");
+	return [projects.join("\u0002"), sessions.join("\u0002"), runtimes.join("\u0002"), pending.join("\u0002"), state.buildId ?? ""].join("\u0003");
 }
 
 /** 强 ETag 形态（含引号）：`"<16 hex>"`。 */

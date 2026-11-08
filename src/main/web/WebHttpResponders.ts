@@ -186,7 +186,7 @@ export function sendJson(response: ServerResponse, body: unknown, extraHeaders: 
 	response.end(payload);
 }
 
-export function sendError(response: ServerResponse, statusCode: number, code: string, error: string, params?: Record<string, string | number>): void {
+export function sendError(response: ServerResponse, statusCode: number, code: string, error: string, params?: Record<string, string | number>, extraHeaders: Record<string, string> = {}): void {
 	// headersSent 防护：流式路由（如 restart 进度 SSE）已写头后再失败时，不能再
 	// writeHead——那公抛 ERR_HTTP_HEADERS_SENT 并升级为 unhandledRejection；
 	// 尽力往已开的流里写一行 JSON 错误行后直接 end。
@@ -206,6 +206,7 @@ export function sendError(response: ServerResponse, statusCode: number, code: st
 		"content-type": "application/json; charset=utf-8",
 		"cache-control": "no-store",
 		...WEB_CORS_HEADERS,
+		...extraHeaders,
 	});
 	response.end(
 		JSON.stringify({

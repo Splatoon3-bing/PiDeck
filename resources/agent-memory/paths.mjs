@@ -63,8 +63,16 @@ export const MAX_INDEXED_MESSAGE_CHARS = 4000;
 /** 项目 id 只允许这些字符；宿主侧同样有校验，这里是第二道闸。 */
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
-/** 路径规范化口径：Windows 大小写不敏感，同一个目录的不同大小写要落到同一个键。 */
+/**
+ * 路径规范化口径：Windows 形态（盘符/UNC）按 win32 语义展开并折大小写；
+ * 其余按宿主平台语义（Windows 大小写不敏感，POSIX 保留大小写）。
+ *
+ * 不能直接用宿主 path.resolve：POSIX 上的 `C:\\proj` 会被当成相对路径并拼上 cwd，
+ * 同一条 Windows cwd 的 `C:/proj` 与 `C:\\proj` 两种写法会算出两个项目键，
+ * 记忆目录也因此分叉（同一个项目在 pi / ACP / 终端里 cwd 相同却不共享记忆）。
+ */
 function canonicalPath(cwd) {
+	if (/^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith("\\\\")) return path.win32.resolve(cwd).toLowerCase();
 	const resolved = path.resolve(cwd);
 	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }

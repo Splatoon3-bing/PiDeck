@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
 import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
 
@@ -99,17 +99,17 @@ test("scanSkillRoots：同名技能按 rank 小者胜，最终按 name 排序", 
 });
 
 test("resolveSkillProjectRoot：向上找最近 .git；找不到时回退 cwd", async () => {
-	// 用 fromCharCode(92) 处理 Windows 分隔符，避免测试源码里的反斜杠转义噪音。
-	const sep = String.fromCharCode(92);
-	const normalize = (path) =>
-		String(path)
-			.split(sep)
-			.join("/")
-			.replace(/\/\.git$/, "");
-	const gitDirs = new Set(["C:/repo", "C:/repo/apps"]);
-	const pathExists = async (path) => gitDirs.has(normalize(path));
-	assert.equal(await catalog.resolveSkillProjectRoot("C:/repo/apps/web", pathExists), resolve("C:/repo/apps"));
-	assert.equal(await catalog.resolveSkillProjectRoot("C:/outside/deep", pathExists), resolve("C:/outside/deep"));
+	// 夹具按宿主平台路径语义构造（与函数自身的 resolve/dirname 同一口径）：函数消费的是
+	// 宿主 cwd，不可能在 POSIX 上收到盘符路径。用 Windows 字面量当夹具只会变成平台探针。
+	const repoRoot = join(tmpdir(), "pideck-skill-root-fixture");
+	const appsRoot = join(repoRoot, "apps");
+	// .git 只存在于 repoRoot 与 appsRoot（pathExists 注入，无需落盘）
+	const gitDirs = [repoRoot, appsRoot];
+	const pathExists = async (candidate) => gitDirs.some((dir) => candidate === join(dir, ".git"));
+	assert.equal(await catalog.resolveSkillProjectRoot(join(appsRoot, "web"), pathExists), appsRoot);
+	// 不在任何 .git 下 → 回退到 cwd 本身
+	const outside = join(tmpdir(), "pideck-skill-outside-fixture", "deep");
+	assert.equal(await catalog.resolveSkillProjectRoot(outside, pathExists), outside);
 });
 
 test("dshSkillRoots：rank 顺序与 DSH provider 对齐，custom/user/bundled 齐全", () => {

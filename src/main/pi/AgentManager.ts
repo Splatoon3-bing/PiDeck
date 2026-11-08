@@ -175,6 +175,20 @@ function isPiBusyRejection(message: string): boolean {
 }
 
 /**
+ * 上下文压缩期间 pi 拒收 prompt：
+ * "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."
+ *
+ * 这条不是「参数/能力」类错误：压缩结束后同一条请求本来就能正常投递。实测单会话连发
+ * 4 条全被这条拒收，用户只看到「消息发送失败」——所以识别出来后等压缩收尾再重发一次。
+ */
+function isPiCompactionRejection(message: string): boolean {
+	return /compaction is in progress/i.test(message);
+}
+
+/** 压缩期间被拒的 prompt 最长等待时长：压缩本身可能跑几分钟，等不到才回落到失败路径。 */
+const COMPACTION_PROMPT_WAIT_MS = 180_000;
+
+/**
  * PiDeck 自动命名的来源（#266）："auto" = 内置扩展经 marker 校验的模型标题（终态），
  * "fallback" = 首条消息派生的兜底名（可被 auto 升级）。catalog 据此决定是否能领取占位标题。
  */
@@ -836,6 +850,7 @@ export class AgentManager {
 						exitCode: diag?.exitCode ?? null,
 						spawnFailed: diag?.spawnFailed === true,
 						cwdMissing: diag?.cwdMissing === true,
+						cwdMissingAtSpawn: diag?.cwdMissingAtSpawn === true,
 						processStillRunning: fallbackInput.processStillRunning,
 						remote: remoteRuntime,
 						reason: remoteRuntime ? "remote runtime: extension fallback is a local-only concept" : describeExtensionFallbackSkip(fallbackInput),
@@ -2688,7 +2703,8 @@ export class AgentManager {
 				agentId: input.agentId,
 				requestId: input.requestId,
 			});
-			const response = await runtime.process.client.request(requestPayload, this.settingsStore.get().rpcTimeout);
+			const rpcTimeout = this.settingsStore.get().rpcTimeout;
+			const response = await runtime.process.client.request(requestPayload, rpcTimeout);
 			void this.appLogger?.info("session-perf", "Prompt RPC response received", {
 				agentId: input.agentId,
 				requestId: input.requestId,
@@ -2696,7 +2712,25 @@ export class AgentManager {
 				rpcMs: Date.now() - rpcStartedAt,
 			});
 			if (!response.success) {
-				const rejectionText = response.error ?? "图片消息发送失败";
+				let finalResponse = response;
+				// 压缩期间拒收：等压缩收尾后重发同一条，而不是把用户消息直接判死。
+				if (isPiCompactionRejection(response.error ?? "")) {
+					const retried = await this.retryPromptAfterCompaction(input.agentId, runtime, requestPayload, rpcTimeout, input.requestId);
+					if ("timedOut" in retried) {
+						// 与「pi 前置校验拒收」区分：这条消息真的没发出去，压缩结束后需手动重发。
+						runtime.tab.status = statusBeforePrompt === "running" ? "running" : "idle";
+						this.addLocalizedMessage(input.agentId, "system", "diagnostic.compactInProgress", "上下文压缩仍在进行，这条消息没有发出；压缩完成后请重新发送。");
+						this.emitState();
+						return { accepted: false, error: "compaction in progress", i18nKey: "diagnostic.compactInProgress", delivery: "rejected" };
+					}
+					finalResponse = retried.response;
+					if (finalResponse.success) {
+						// 压缩结束后投递成功：走与正常发送相同的收尾（含等待中的乐观气泡）。
+						await this.settleAcceptedPrompt(input.agentId, runtime, agentMessage, finalResponse.data, alreadyBusy);
+						return { accepted: true };
+					}
+				}
+				const rejectionText = finalResponse.error ?? "图片消息发送失败";
 				// 兜底重发（Issue #371）：本地判定空闲但 pi 实际仍在流式时，prompt 被
 				// "Agent is already processing" 拒收。用户点的是发送，不该收到 SDK 原文
 				// toast——按设置项 busySendDelivery 补一次带语义的 prompt（默认 steer）。
@@ -2709,7 +2743,7 @@ export class AgentManager {
 						requestId: input.requestId,
 						streamingBehavior: busyRetryBehavior,
 					});
-					const retry = await runtime.process.client.request(retryPayload, this.settingsStore.get().rpcTimeout);
+					const retry = await runtime.process.client.request(retryPayload, rpcTimeout);
 					busyRetryResponse = retry;
 					if (retry.success) {
 						// 重发成功：用户消息已按队列语义投递，走与正常发送相同的收尾。
@@ -5422,6 +5456,9 @@ export class AgentManager {
 		lines.push(`工作目录: ${diag.cwd}`);
 		if (diag.cwdMissing) {
 			lines.push("工作目录状态: ✗ 不存在 —— 这才是上面 spawn ENOENT 的真实原因" + "（Windows 会把「工作目录无效」误报成 cmd.exe 找不到，pi/cmd.exe 本身没问题）");
+		} else if (diag.cwdMissingAtSpawn) {
+			// 下发瞬间不可用、现已恢复：别把用户引去重新指定项目路径。
+			lines.push("工作目录状态: ⚠ 启动瞬间不可访问（现在已存在）—— 不是项目路径配错，重试即可");
 		}
 		// 「✗ 失败」只在真的探过 pi --version 时才成立；没探过就说没探过，
 		// 否则用户会被引去重装 pi（现场：真正原因其实是工作目录没了）。
@@ -5444,6 +5481,9 @@ export class AgentManager {
 			lines.push("1. 确认上面的工作目录是否真的存在（被移动/重命名/删除，或所在磁盘/网络盘未挂载）");
 			lines.push("2. 目录不存在时 pi 无法以该目录为工作目录启动，与 pi 是否安装无关");
 			lines.push("3. 在 PiDeck 中重新指定该项目的目录后重启会话");
+		} else if (diag.cwdMissingAtSpawn) {
+			lines.push("1. 工作目录现在可访问，直接在会话里重试启动");
+			lines.push("2. 若反复出现，检查是否有进程在瞬时间替换/卸载该项目目录（重建 checkout、容器挂载竞争、备份/同步工具接管）");
 		} else if (versionCheckFailed) {
 			lines.push("1. 在终端执行 pi --version，确认 pi 是否已安装且路径正确");
 			lines.push("2. 如未安装，执行 npm install -g @earendil-works/pi-coding-agent");
@@ -6933,6 +6973,50 @@ export class AgentManager {
 	/** 当前 generation 是否已封印，封印期间所有流式事件应丢弃。 */
 	private isAgentStreamSealed(agentId: string): boolean {
 		return this.abortGate.isSealed(agentId);
+	}
+
+	/**
+	 * 压缩期间被 pi 拒收的 prompt：等压缩收尾后重发同一条（见 isPiCompactionRejection）。
+	 *
+	 * 返回重发结果；等不到压缩结束时返回 { timedOut: true }，由调用方给出可读提示——
+	 * 用户需要知道「消息没发出、压缩完成后重发」，而不是「消息发送失败」。
+	 */
+	private async retryPromptAfterCompaction(agentId: string, runtime: AgentRuntime, payload: Record<string, unknown>, rpcTimeout: number, requestId?: string): Promise<{ response: RpcResponse } | { timedOut: true }> {
+		void this.appLogger?.info("agent", "Prompt rejected during compaction; waiting for it to finish", {
+			agentId,
+			requestId,
+			maxWaitMs: COMPACTION_PROMPT_WAIT_MS,
+		});
+		if (!(await this.waitForCompactionEnd(agentId, runtime, rpcTimeout))) {
+			void this.appLogger?.warn("agent", "Prompt not sent: compaction still in progress after wait", {
+				agentId,
+				requestId,
+				maxWaitMs: COMPACTION_PROMPT_WAIT_MS,
+			});
+			return { timedOut: true };
+		}
+		const response = await runtime.process.client.request(payload, rpcTimeout);
+		void this.appLogger?.info("session-perf", "Prompt RPC resent after compaction", {
+			agentId,
+			requestId,
+			success: response.success,
+		});
+		return { response };
+	}
+
+	/**
+	 * 等 pi 报告压缩结束。权威信号是 get_state.isCompacting（与 markIdleIfPiReportsNoWork 同源）；
+	 * 拿不到权威状态时退回 compaction_start/end 事件标记，宁可多等一轮也不把消息塞给仍在压缩的 pi。
+	 */
+	private async waitForCompactionEnd(agentId: string, runtime: AgentRuntime, rpcTimeout: number): Promise<boolean> {
+		const deadline = Date.now() + COMPACTION_PROMPT_WAIT_MS;
+		while (Date.now() < deadline) {
+			const response = await runtime.process.client.request({ type: "get_state" }, Math.min(rpcTimeout, 10_000)).catch(() => undefined);
+			const state = response?.success ? (response.data as { isCompacting?: boolean } | undefined) : undefined;
+			if (state ? state.isCompacting !== true : !this.rpcCompactingAgents.has(agentId)) return true;
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+		}
+		return false;
 	}
 
 	/**

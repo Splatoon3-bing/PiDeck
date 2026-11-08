@@ -50,13 +50,19 @@ test("sessionPath ↔ sessionFromPath 往返一致（合法 id 集合）", () =>
 	}
 });
 
-test("源码契约：WebChatApp 接线了 boot 恢复 / pushState 同步 / popstate 三段路由逻辑", () => {
-	const src = readFileSync(resolve(import.meta.dirname, "../src/renderer/src/web/WebChatApp.tsx"), "utf8");
-	assert.match(src, /routeRestoredRef/);
-	assert.match(src, /window\.history\.pushState/);
-	assert.match(src, /window\.history\.replaceState/);
-	assert.match(src, /addEventListener\("popstate"/);
-	assert.match(src, /sessionFromPath\(window\.location\.pathname\)/);
+test("源码契约：WebChatApp 经 useWebSessionNavigation 接线 boot 恢复 / pushState 同步 / popstate 路由", () => {
+	// 组合根只保留装配；三段副作用在 useWebSessionNavigation（WebChatApp 巨文件纪律：不净增长）。
+	const app = readFileSync(resolve(import.meta.dirname, "../src/renderer/src/web/WebChatApp.tsx"), "utf8");
+	assert.match(app, /useWebSessionRoute\(/);
+	assert.match(app, /useWebTabSync\(/);
+	assert.match(app, /routeRestoredRef/);
+
+	const hook = readFileSync(resolve(import.meta.dirname, "../src/renderer/src/web/useWebSessionNavigation.ts"), "utf8");
+	assert.match(hook, /window\.history\.pushState/);
+	assert.match(hook, /window\.history\.replaceState/);
+	assert.match(hook, /addEventListener\("popstate"/);
+	assert.match(hook, /sessionFromPath\(window\.location\.pathname\)/);
+	assert.match(hook, /parseStoredWebTabs|WEB_TABS_STORAGE_KEY/);
 });
 
 test("源码契约：服务端静态映射对无扩展名路径回落 web.html，/s/* 无需服务端路由", () => {

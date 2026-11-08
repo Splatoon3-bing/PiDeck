@@ -1,3 +1,32 @@
+## v0.11.0 (2026-11-08)
+
+This release brings the PiDeck Web front from a chat-only surface to a full workbench: terminal, automation, agents, favorites, notices, host plugins, PWA/offline all land, with mobile and iPad physical-keyboard support polished; on the engineering side, the full test suite goes from 156 red to 0, with session path identity, ACP shutdown semantics, and cross-platform path handling fixed.
+
+### 🚀 New Features
+- **Web Terminal (off by default)** — Open a project terminal in the browser after enabling in settings: xterm.js over WebSocket, multi-tab, resize, disconnect prompts; handshake enforces four checks (toggle/token/same-origin/Upgrade header), with input frame-rate/rate/backpressure/concurrency limits and PTY cleanup on close.
+- **Web workbench fully aligned** — Automation page (scheduled task list/edit/history), Agents page (list/edit/bind), Favorites page (search/jump), Notice/Announcement/Feedback center, Status panel (runtime/context/subagents/todo), read-only split peek, each with E2E.
+- **Web host plugins read-only entry** — Skills & extensions dialog gains a "Host Plugins" tab showing name/version/enabled/permissions only; no toggle/install/consent/execution (security review deferred).
+- **Web PWA/offline** — Offline readability (session history/settings cache), SW strategy unchanged.
+- **Web settings panel** — Appearance/session-defaults/input-behavior projection, theme one-tap toggle with first-frame preference.
+
+### ✨ Improvements
+- **iPad + Magic Keyboard Enter to send** — `(pointer: coarse)` stays true on iPad with a physical keyboard, skipping all keyboard send; switched to `(any-hover: hover)` to distinguish pure touch from touch+physical-keyboard.
+- **Session path identity normalization** — Same file written as `C:/a/b` and `C:\a\b` or `/a//b` and `/a/b` no longer creates duplicate identities; identity picks win32/posix semantics by path shape, storage only heals POSIX backslash form.
+- **ACP graceful shutdown** — `killAcpProcessTree` accepts platform parameter; manager closes stdin before `shutdownAcpProcess` so non-Windows CLIs also get EOF for SessionEnd.
+- **Cross-platform path semantics** — Security policy relative dirs resolve by base shape; image whitelist uses win32/posix relative by path shape (fixes 8.3 short-name incident); project memory keys use `win32.resolve` for drive/UNC; WSL resource target UNC absoluteness.
+- **Settings panel spinner shares animation; model sheet respects semantic tokens at any font size; scroll guard ledger re-registered.**
+
+### 🐛 Fixes
+- **Full test suite red-to-zero (156→0)** — Test TS loader fixes 71 files that failed to load; awaited timers must not unref (ACP retry backoff/settings write coalescing/DSH boot timeout/DSH kill grace); WSL branch platform injection; Linux system font dirs injectable; CUA tests inject platform-agnostic engine.
+- **Host plugin route assembly order** — `registerWebDomainRoutes` runs before `installWebHostPluginDeps`, causing `/api/host-plugins` to permanently 404; changed to unconditional registration with catalog fetched per-request.
+- **Package version reader** — `readPackageVersion` treats `ENOTDIR` (start path is a file) as "continue upward" instead of giving up.
+
+### 🙏 Thanks
+
+Thanks to all users who reported issues, especially the reporter who found the iPad Enter-to-send problem.
+
+---
+
 ## v0.10.0 (2026-11-05)
 
 PiDeck grows from managing pi sessions into a workbench for several backends and environments: agent memory lands for pi and ACP sessions, and projects inside WSL distributions can be added and edited like local ones. On the engineering side, main-process networking moves onto Chromium's stack, and the timeline plus long lists finish their virtualization pass.

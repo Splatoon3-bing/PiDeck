@@ -13,18 +13,19 @@
  * diff 只能来自本项目 git status，项目外路径回退成文件预览（不弹确认，由文件路径自身求值）。
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { Loader2, Pencil, X } from "lucide-react";
 /** 超过这个行数才虚拟化：短文件直接全量渲染，省掉测量与绝对定位开销。 */
 const VIRTUALIZE_MIN_LINES = 40;
 import { MarkdownStream } from "@/components/session/MarkdownStream";
 import { VirtualStack } from "@/components/ui-shadcn/virtual-stack";
 import { t, type TranslationKey } from "@/i18n";
 import { fetchFileContent, fetchGitDiff, fetchGitStatus } from "./webApi";
+import { WebFileEditor } from "./WebFileEditor";
 import { useDismissOnBack } from "./useDismissOnBack";
 
 export type WebFilePreviewTarget = { kind: "file"; projectId: string; projectRoot: string; path: string; line?: number } | { kind: "diff"; projectId: string; projectRoot: string; path: string };
 
-type FileState = { content?: string; tooLarge?: boolean; truncated?: boolean; binary?: boolean };
+type FileState = { content?: string; tooLarge?: boolean; truncated?: boolean; binary?: boolean; mtimeMs?: number; size?: number };
 type DiffState = { originalContent: string; modifiedContent: string } | null;
 
 /** 服务端 ask/deny 的 reason → 文案键（与 useExternalPathOpenGate 同一组键；Web 包不引那个
@@ -138,12 +139,15 @@ export function classifyFileContentOutcome(outcome: { ok: true; data: FileState 
 
 /** 文件模式：md → MarkdownStream（外链新标签页），其余 → 行号文本。
  * 项目外路径先按安全等级求值：允许直接读，需确认则内联「只读查看」卡片，拒绝则说明原因。 */
-function FilePreviewBody({ projectId, path, line }: { projectId: string; path: string; line?: number }) {
+function FilePreviewBody({ projectId, path, line, canEdit }: { projectId: string; path: string; line?: number; canEdit: boolean }) {
 	const [view, setView] = useState<FilePreviewView>({ phase: "loading" });
 	// 已确认的目标键：随 path 变化自动失效，避免「确认了 A 就把 B 也一起放行」
 	const [confirmedKey, setConfirmedKey] = useState<string | null>(null);
 	// 每次确认都推进一帧：服务端若仍回 ask（策略刚被改严），用户还能再点一次而不是卡在空屏
 	const [confirmTick, setConfirmTick] = useState(0);
+	// 编辑态与「保存后/冲突后重新读取」计数：保存成功推进一帧拿新 mtime。
+	const [editing, setEditing] = useState(false);
+	const [reloadTick, setReloadTick] = useState(0);
 	const targetKey = `${projectId}\u0000${path}`;
 	const confirmed = confirmedKey === targetKey;
 
@@ -156,7 +160,7 @@ function FilePreviewBody({ projectId, path, line }: { projectId: string; path: s
 		return () => {
 			alive = false;
 		};
-	}, [projectId, path, confirmed, confirmTick]);
+	}, [projectId, path, confirmed, confirmTick, reloadTick]);
 	if (view.phase === "confirm") {
 		return (
 			<div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
@@ -188,6 +192,38 @@ function FilePreviewBody({ projectId, path, line }: { projectId: string; path: s
 	if (data.tooLarge) return <div className="flex flex-1 items-center justify-center px-6 text-center text-caption text-warning">{t("web.fileViewerTooLarge")}</div>;
 	if (data.binary) return <div className="flex flex-1 items-center justify-center px-6 text-center text-caption text-muted-foreground">{t("web.fileViewerBinary")}</div>;
 	if (data.content == null) return <div className="flex flex-1 items-center justify-center px-6 text-center text-caption text-muted-foreground">{t("web.previewLoadFailed")}</div>;
+	// 可编辑条件在父层已收窄（项目内相对路径）；这里再排除二进制/截断/超限，
+	// 避免把「只读预览」当编辑器打开后保存失败。
+	const editable = canEdit && !data.binary && !data.tooLarge && !data.truncated;
+	if (editing && editable) {
+		return (
+			<WebFileEditor
+				projectId={projectId}
+				path={path}
+				initialContent={data.content}
+				initialMtimeMs={data.mtimeMs}
+				onSaved={(content, mtimeMs) => {
+					// 保存后留在编辑态：用户常连续改几处；顶部「已保存」与退出编辑按钮就是出口。
+					// 父层把 initialContent 更新为刚写入的内容，编辑器据此把 dirty 归零。
+					setView({ phase: "ready", data: { ...data, content, mtimeMs } });
+				}}
+				onCancel={() => setEditing(false)}
+				onReload={() => {
+					setEditing(false);
+					setReloadTick((tick) => tick + 1);
+				}}
+			/>
+		);
+	}
+	const editBar = editable ? (
+		<div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-card px-2 py-1">
+			<span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{data.size != null ? `${Math.max(1, Math.round(data.size / 1024))} KB` : ""}</span>
+			<button type="button" className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-caption text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground" onClick={() => setEditing(true)}>
+				<Pencil className="size-3.5" aria-hidden="true" />
+				{t("web.fileEdit")}
+			</button>
+		</div>
+	) : null;
 	// 截断预览：能看前 512KB 比完全不给强；底部提示告知完整内容请回桌面端
 	const truncatedNotice = data.truncated ? <div className="shrink-0 border-t border-border bg-warning/5 px-3 py-1.5 text-micro text-warning">{t("web.fileViewerTruncated")}</div> : null;
 	if (path.toLowerCase().endsWith(".md")) {
@@ -196,6 +232,7 @@ function FilePreviewBody({ projectId, path, line }: { projectId: string; path: s
 		}
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
+				{editBar}
 				{/* scroll-ok: text —— 单一文本块（pre / markdown 正文），没有行列表可切，虚拟化无从下手。 */}
 				<div className="markdown-body min-h-0 flex-1 overflow-y-auto px-3 py-2">
 					<MarkdownStream text={data.content} onOpenExternal={(url: string) => window.open(url, "_blank", "noopener")} />
@@ -206,6 +243,7 @@ function FilePreviewBody({ projectId, path, line }: { projectId: string; path: s
 	}
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
+			{editBar}
 			<NumberedText content={data.content} line={line} />
 			{truncatedNotice}
 		</div>
@@ -260,7 +298,7 @@ function DiffPreviewBody({ projectId, path }: { projectId: string; path: string 
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				<div className="shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-micro text-muted-foreground">{t("web.diffFallbackToFile")}</div>
-				<FilePreviewBody projectId={projectId} path={path} />
+				<FilePreviewBody projectId={projectId} path={path} canEdit={false} />
 			</div>
 		);
 	}
@@ -298,7 +336,7 @@ export function WebFilePreview(props: { target: WebFilePreviewTarget; onClose: (
 			// diff 只能来自本项目 git status：项目外路径回退成文件预览（文件自身仍要过安全策略）
 			<div className="flex min-h-0 flex-1 flex-col">
 				{target.kind === "diff" ? <div className="shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-micro text-muted-foreground">{t("web.diffFallbackToFile")}</div> : null}
-				<FilePreviewBody projectId={target.projectId} path={targetPath} line={target.kind === "file" ? target.line : undefined} />
+				<FilePreviewBody projectId={target.projectId} path={targetPath} line={target.kind === "file" ? target.line : undefined} canEdit={target.kind === "file" && relative !== null} />
 			</div>
 		);
 	return (
