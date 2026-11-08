@@ -11,9 +11,10 @@ import { t } from "@/i18n";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui-shadcn/dialog";
 import { Switch } from "@/components/ui-shadcn/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui-shadcn/tabs";
-import { listWebExtensions, listWebSkills, toggleWebExtension, toggleWebSkill, type WebExtensionSummary, type WebSkillSummary } from "./webApi";
+import { listWebExtensions, listWebHostPlugins, listWebSkills, toggleWebExtension, toggleWebSkill, type WebExtensionSummary, type WebHostPluginSummary, type WebSkillSummary } from "./webApi";
 
-type AssetsState = { phase: "loading" } | { phase: "ready"; skills: WebSkillSummary[]; extensions: WebExtensionSummary[]; conflicts: { builtIn: string; thirdParty: string }[] } | { phase: "error"; message: string };
+/** hostPlugins=null：服务端未装配插件目录（503），只影响该 tab，不把技能/扩展面板一起打挂。 */
+type AssetsState = { phase: "loading" } | { phase: "ready"; skills: WebSkillSummary[]; extensions: WebExtensionSummary[]; conflicts: { builtIn: string; thirdParty: string }[]; hostPlugins: WebHostPluginSummary[] | null } | { phase: "error"; message: string };
 
 export function WebSkillsExtensionsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
 	const [state, setState] = useState<AssetsState>({ phase: "loading" });
@@ -21,8 +22,8 @@ export function WebSkillsExtensionsDialog({ open, onOpenChange }: { open: boolea
 	const reload = useCallback(async () => {
 		setState({ phase: "loading" });
 		try {
-			const [skillResult, extensionResult] = await Promise.all([listWebSkills(), listWebExtensions()]);
-			setState({ phase: "ready", skills: skillResult.skills, extensions: extensionResult.extensions, conflicts: extensionResult.conflicts });
+			const [skillResult, extensionResult, hostPlugins] = await Promise.all([listWebSkills(), listWebExtensions(), listWebHostPlugins().catch(() => null)]);
+			setState({ phase: "ready", skills: skillResult.skills, extensions: extensionResult.extensions, conflicts: extensionResult.conflicts, hostPlugins });
 		} catch (error) {
 			setState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
 		}
@@ -78,6 +79,7 @@ export function WebSkillsExtensionsDialog({ open, onOpenChange }: { open: boolea
 						<TabsList className="self-start">
 							<TabsTrigger value="skills">{t("web.tabSkills")}</TabsTrigger>
 							<TabsTrigger value="extensions">{t("web.tabExtensions")}</TabsTrigger>
+							<TabsTrigger value="hostPlugins">{t("web.tabHostPlugins")}</TabsTrigger>
 						</TabsList>
 						{/* scroll-ok: transient —— 一次性弹窗 / 设置面板：内容随交互生命周期结束，不是随数据增长的列表。 */}
 						<TabsContent value="skills" className="min-h-0 overflow-y-auto">
@@ -124,6 +126,38 @@ export function WebSkillsExtensionsDialog({ open, onOpenChange }: { open: boolea
 												{state.conflicts.some((conflict) => conflict.thirdParty === extension.source) ? <p className="mt-0.5 text-micro text-warning">{t("web.extensionConflict", { name: state.conflicts.find((conflict) => conflict.thirdParty === extension.source)?.builtIn ?? "" })}</p> : null}
 											</div>
 											<Switch checked={extension.enabled ?? true} aria-label={t("web.extensionToggle")} onCheckedChange={(checked) => void onExtensionToggle(extension, checked)} />
+										</li>
+									))}
+								</ul>
+							)}
+						</TabsContent>
+						{/* T14：宿主插件只读投影（GET /api/host-plugins）；安装/授权/执行不在 Web 开放。 */}
+						{/* scroll-ok: transient —— 一次性弹窗：内容随交互生命周期结束，不是随数据增长的列表。 */}
+						<TabsContent value="hostPlugins" className="min-h-0 overflow-y-auto">
+							<p className="mb-2 text-micro text-text-muted">{t("web.hostPluginsReadOnlyHint")}</p>
+							{state.hostPlugins === null ? (
+								<p className="py-6 text-center text-sm text-text-muted">{t("web.hostPluginsUnavailable")}</p>
+							) : state.hostPlugins.length === 0 ? (
+								<p className="py-6 text-center text-sm text-text-muted">{t("web.hostPluginsEmpty")}</p>
+							) : (
+								<ul className="flex flex-col gap-1.5">
+									{state.hostPlugins.map((plugin) => (
+										<li key={plugin.id} className="rounded-md border border-border bg-bg-surface px-2.5 py-2">
+											<p className="truncate text-sm font-medium">
+												{plugin.name}
+												<span className="ml-1.5 text-micro font-normal text-text-muted">v{plugin.version}</span>
+												<span className="ml-1.5 rounded bg-primary/10 px-1 text-micro text-primary">{plugin.id}</span>
+											</p>
+											{plugin.description ? <p className="mt-0.5 line-clamp-2 text-xs text-text-muted">{plugin.description}</p> : null}
+											<p className="mt-1 flex flex-wrap items-center gap-1 text-micro text-text-muted">
+												<span>{plugin.enabled ? t("common.enabled") : t("common.disabled")}</span>
+												{plugin.requiresConsent ? <span className="rounded bg-warning/10 px-1 text-warning">{t("web.hostPluginConsentRequired")}</span> : null}
+												{plugin.permissions.length > 0 ? (
+													<span>
+														{t("web.hostPluginPermissions")}: {plugin.permissions.join(", ")}
+													</span>
+												) : null}
+											</p>
 										</li>
 									))}
 								</ul>

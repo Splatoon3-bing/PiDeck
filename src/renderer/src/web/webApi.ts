@@ -16,6 +16,7 @@ import type { SafeWebSettings, WebWritableSettings } from "../../../shared/types
 import type { AutomationCronPreview, CreateAutomationTaskInput, UpdateAutomationTaskInput, WebAutomationRun, WebAutomationSnapshot, WebAutomationTask } from "../../../shared/types";
 import type { WebContextUsage, WebFileNodeLite, WebState } from "./webTypes";
 import type { AgentInvokeInput, AgentProfile } from "../../../shared/types/agentProfile";
+import type { HostPluginPermission } from "../../../shared/types/hostPlugin";
 import type { WebAgentSnapshot } from "../../../main/web/WebAgentRoutes";
 import type { FavoriteEntry } from "../../../shared/types/favorites";
 
@@ -921,6 +922,20 @@ export async function toggleWebExtension(source: string, enabled: boolean, scope
 		body: JSON.stringify({ source, enabled, scope }),
 	});
 	if (!res.ok) throw new Error(`extension toggle ${res.status}`);
+}
+
+/**
+ * 宿主插件只读投影（T14）：服务端只下发 `id/name/version/description/enabled/requiresConsent/permissions`。
+ * 503 = 宿主未装配插件目录（或目录读取失败）→ 返回 null，面板显示不可用且不影响技能/扩展。
+ */
+export type WebHostPluginSummary = { id: string; name: string; version: string; description?: string; enabled: boolean; requiresConsent: boolean; permissions: HostPluginPermission[] };
+
+export async function listWebHostPlugins(): Promise<WebHostPluginSummary[] | null> {
+	const res = await apiFetch("/api/host-plugins");
+	if (res.status === 503) return null;
+	if (!res.ok) throw new Error(`host plugins ${res.status}`);
+	const payload = (await res.json()) as { plugins?: WebHostPluginSummary[] };
+	return payload.plugins ?? [];
 }
 
 // ── 自动化（T8）：白名单投影 + 显式错误码（busy/notFound 由 UI 决定提示） ──

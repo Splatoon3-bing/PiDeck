@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: 2ef0b17dc7bcee037954d0c7f22065b13769e90aaed11a0486fa212edab9c74a（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 6c5072993f702b35e366a6ad1ab713aeae0767725cb14a6601059bf52ec1d254（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -7400,6 +7400,12 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.assetsTitle": "技能與擴充套件",
 	"web.tabSkills": "技能",
 	"web.tabExtensions": "擴充套件",
+	"web.tabHostPlugins": "宿主外掛",
+	"web.hostPluginsEmpty": "沒有已安裝宿主外掛",
+	"web.hostPluginsUnavailable": "宿主外掛目錄不可用",
+	"web.hostPluginsReadOnlyHint": "只讀：安裝、授權與執行僅限桌面端",
+	"web.hostPluginConsentRequired": "待授權",
+	"web.hostPluginPermissions": "權限",
 	"web.skillsEmpty": "沒有可用技能",
 	"web.extensionsEmpty": "沒有已安裝擴充套件",
 	"web.extensionConflict": "與內建擴充套件 {name} 同名，已被停用",
