@@ -95,7 +95,7 @@
 | T11 | 生图/生视频 | P3 | 6h | 后端链路 | done（v1 生图；生视频后置，见切片 §5） |
 | T12 | 远程/WSL/Worktree | P3 | 10h | 安全评审 | done（v1：远程不投影；locator 通道后置） |
 | T13 | 通知/公告/反馈 | P2 | 4h | 路由基建 | done |
-| T14 | 宿主插件（只读） | P3 | 3h | 安全评审 | 评审完成；实现后置（见评审 §3） |
+| T14 | 宿主插件（只读） | P3 | 3h | 安全评审 | done（只读 API + 投影；UI 入口后置） |
 | T15 | PWA/离线 | P2 | 3h | T5 | done（离线可读性；SW 策略沿用既有） |
 
 ## Dependency Diagram
@@ -361,6 +361,14 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-08 — 全量红单根因修复（TS loader）+ T14 只读实现
+
+- **长尾根因**：本机 Node 构建不含 TypeScript 剥离（`ERR_NO_TYPESCRIPT`），71 个测试文件直连 `import "../src/….ts"` 整体加载失败。按项目约定「生产 TS 用测试 helper」加 `tests/helpers/tsEsmLoader.mjs`（+`tsEsmHooks.mjs`，用仓库既有 `typescript` 转译；`.ts?t=` 也按 pathname 识别），接入 `npm test` / `test:serial`。**不动任何断言**：全量 fail 156 → 84（总用例 15724 → 16482，原先加载失败的文件真正跑起来了）。
+- 追加修复：`tests/cua/*` 动态 `import("….ts?t=…")` 被 loader 覆盖后 7/7 转绿。
+- **T14 只读实现**：`WebHostPluginRoutes` 只允许 `GET /api/host-plugins`；投影白名单 `id/name/version/description/enabled/requiresConsent/permissions`，**不下发** `directory`/`fingerprint`/`network`/`services`/`contributes`；写方法 405、未装配或目录读取失败 503 且不回内部路径。装配沿用域模块自持依赖（`installWebHostPluginDeps`），`main/index.ts` 不增长。
+- 验证：`webHostPluginRoutes` 3 条全绿；typecheck 0 错；check:format 通过。
+- 未完成（诚实记录）：剩余 ~84 条中，`acpAgentManager`（26）单跑 50/50 全绿、批量下出现「Promise 未收敛」，判定为负载/进程级联（需单独排查 test 进程资源上限）；`wslPiConfigStore` 等 WSL 语义在 Linux 主机不可用（环境依赖）；`webLayout` 5 条已用基线 worktree 确认为既有源码契约偏差。
 
 ### 2026-11-07 — T12 安全评审 + v1 投影收口；T14 评审
 

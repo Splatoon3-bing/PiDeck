@@ -252,6 +252,8 @@ export class WebServiceManager {
 	favoriteRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 通知/公告路由（T13）；未装配时 /api/notices、/api/announcements 走 404。 */
 	noticeRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 宿主插件只读路由（T14）；未装配时 /api/host-plugins 走 404。 */
+	hostPluginRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 生图路由（T11）；未装配时 /api/imagegen/* 走 404。 */
 	imageGenRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
@@ -543,6 +545,7 @@ export class WebServiceManager {
 			if (this.favoriteRoutes && (await this.favoriteRoutes.handle(url, request, response))) return;
 			if (this.noticeRoutes && (await this.noticeRoutes.handle(url, request, response))) return;
 			if (this.imageGenRoutes && (await this.imageGenRoutes.handle(url, request, response))) return;
+			if (this.hostPluginRoutes && (await this.hostPluginRoutes.handle(url, request, response))) return;
 			if (this.workspaceRoutes && (await this.workspaceRoutes.handle(url, request, response))) return;
 			this.sendError(response, 404, "webError.apiNotFound", "API not found");
 			return;

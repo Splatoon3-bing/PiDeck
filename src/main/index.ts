@@ -556,7 +556,7 @@ import { FloatingController } from "./floating/FloatingController";
 import { MiniOverlayWindow } from "./floating/MiniOverlayWindow";
 import { BROWSER_PANEL_PARTITION as BROWSER_PANEL_PARTITION_SHARED, isAllowedBrowserPanelUrl as isAllowedBrowserPanelUrlShared } from "./browser/browserSecurity";
 import { WebServiceManager } from "./web/WebServiceManager";
-import { registerWebRoutes } from "./web/registerWebRoutes";
+import { installWebHostPluginDeps, registerWebRoutes } from "./web/registerWebRoutes";
 import { webDomainProviders } from "./web/webStoreProviders";
 import { createWebImageGenDeps, getWebImageGenDeps, installWebImageGenDeps } from "./web/WebImageGenRoutes";
 import { preparePreloadPath } from "./preloadPath";
@@ -4351,6 +4351,7 @@ function registerIpc() {
 		},
 	});
 	installWebImageGenDeps(createWebImageGenDeps({ config: imageGenConfigStore, service: imageGenService, blobs: imageBlobStore, sessions: imageSessionStore, catalog: () => sessionCatalog }));
+	installWebHostPluginDeps({ catalog: () => hostPlugins.manager.catalog() });
 
 	/**
 	 * 远端会话根判定（远端读取与远端归档共用）：走**与扫描/登记同一份**实现。
