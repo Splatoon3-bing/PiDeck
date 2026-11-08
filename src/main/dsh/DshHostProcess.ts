@@ -281,7 +281,8 @@ export class DshHostProcess {
 				if (jIndex >= 0) this.readyRejecters.splice(jIndex, 1);
 				reject(new Error(`DSH host did not become ready within ${timeoutMs}ms`));
 			}, timeoutMs);
-			timer.unref();
+			// 不能 unref：ensureStarted/dispose 都 await 这个 Promise；unref 后无其它句柄时
+			// 事件循环先排空，boot 超时永远不会触发（表现为启动/退出永久悬挂）。
 			const resolveWrapper = () => {
 				clearTimeout(timer);
 				resolve();
@@ -439,13 +440,14 @@ export class DshHostProcess {
 		// 兜底：kill 后宽限期未退出强制终止（Windows 上偶发）。必须无条件 settle——
 		// 旧实现只在 this.child === child 时才 settle，遇到 child 已被换掉就永久悬挂
 		// （容错路径里 await this.kill() 会把 boot 失败变成永不返回）。
+		// 不能 unref：kill() 要 await 这个兜底结算；unref 后在空载进程里它可能永不触发。
 		setTimeout(() => {
 			if (!this.child || this.child === child) {
 				this.log("dsh-host", "host did not exit within grace period after kill; forcing terminate");
 				child.kill();
 			}
 			settle();
-		}, DEFAULT_KILL_GRACE_MS).unref();
+		}, DEFAULT_KILL_GRACE_MS);
 		await exitPromise;
 	}
 
