@@ -10,6 +10,20 @@ description: PiDeck 每个版本的发布记录：新功能、问题修复与体
 - [中文 CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md)
 - [English CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.md)
 
+## v0.11.0
+
+发布时间：2026-11-08
+
+- 🚀 **Web 终端（默认关闭）**
+- 🚀 **Web 工作台全量补齐**
+- 🚀 **Web 宿主插件只读入口**
+- 🚀 **Web PWA/离线**
+- 🚀 **Web 设置面板**
+- ✨ **iPad+妙控键盘 Enter 发送**
+- ✨ **会话路径身份归一**
+- ✨ **ACP 有序停止**
+- ✨ **跨平台路径语义**
+
 ## v0.10.0
 
 发布时间：2026-11-05
