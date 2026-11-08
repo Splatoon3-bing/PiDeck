@@ -61,8 +61,10 @@ export class TerminalSessionManager {
 		private readonly emit: Emit,
 		private readonly projectStore: Pick<ProjectStore, "get">,
 		private readonly getSettings: () => TerminalWslSettings = () => ({}),
+		/** 平台可注入（仅影响 shell 候选表）：测试锁 win32 断言 pwsh 编号，生产默认真实平台。 */
+		platform: NodeJS.Platform = process.platform,
 	) {
-		this.launcher = new LocalTerminalSessionLauncher(getSettings, log);
+		this.launcher = new LocalTerminalSessionLauncher(getSettings, log, platform);
 	}
 
 	/** Targets are resolved from trusted runtime/project stores, never from renderer paths. */

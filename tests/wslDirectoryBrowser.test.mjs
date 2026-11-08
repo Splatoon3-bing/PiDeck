@@ -69,7 +69,7 @@ test("maps in-distro exit codes to stable read failures", async () => {
 	];
 	for (const [code, expected] of cases) {
 		const runner = recordingExec(code);
-		const result = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "/root" }, { exec: runner.exec });
+		const result = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "/root" }, { exec: runner.exec, platform: "win32" });
 		assert.equal(result.ok, false);
 		assert.equal(result.code, expected);
 		// 只读操作的 outcome 恒为 rejected：重试不会重复执行任何东西。
@@ -79,7 +79,7 @@ test("maps in-distro exit codes to stable read failures", async () => {
 
 test("answers a listing with the normalized path and its entries", async () => {
 	const runner = recordingExec(0, nul(["./ba_cli", "./notes"]));
-	const result = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "/root/" }, { exec: runner.exec });
+	const result = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "/root/" }, { exec: runner.exec, platform: "win32" });
 	assert.equal(result.ok, true);
 	assert.equal(result.value.path, "/root");
 	assert.equal(result.value.truncated, false);
@@ -89,7 +89,7 @@ test("answers a listing with the normalized path and its entries", async () => {
 
 test("refuses before spawning when the request is not usable or WSL is not the host", async () => {
 	const runner = recordingExec(0);
-	const badPath = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "relative/x" }, { exec: runner.exec });
+	const badPath = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "relative/x" }, { exec: runner.exec, platform: "win32" });
 	assert.equal(badPath.code, "WSL_DIRECTORY_PATH_INVALID");
 	const otherPlatform = await browser.listWslDirectory({ distro: "Debian", user: "root", path: "/root" }, { exec: runner.exec, platform: "darwin" });
 	assert.equal(otherPlatform.code, "WSL_DIRECTORY_DISTRO_UNAVAILABLE");

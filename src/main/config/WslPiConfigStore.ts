@@ -32,7 +32,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, join, posix } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { WSL_CONFIG_CODES, WSL_CONFIG_CODE_SET, type PiConfigFileKey, type WslPiConfigSnapshot, type WslPiConfigWriteReceipt } from "../../shared/piConfig";
 import { PROJECT_HOST_ID_PATTERN } from "../../shared/projectLocation";
 import { mainProcessT, type MainProcessTranslationKey } from "../../shared/i18n/mainProcessCopy";
@@ -240,7 +240,8 @@ export function createNodeWslPiConfigExec(options: NodeWslPiConfigExecOptions = 
 		if (platform !== "win32") throw stable(WSL_CONFIG_CODES.unavailable);
 		const exe = wslExe();
 		// shell 回退会把 & | 等字符变成命令语法：宁可不写，也不经 shell。
-		if (exe.shell || (isAbsolute(exe.command) && !exists(exe.command))) throw stable(WSL_CONFIG_CODES.unavailable);
+		// wsl.exe 命令是 Windows 路径：必须用 win32 语义判断绝对路径（posix isAbsolute 在 Linux 上会把 C:\\ 判成相对）。
+		if (exe.shell || (win32.isAbsolute(exe.command) && !exists(exe.command))) throw stable(WSL_CONFIG_CODES.unavailable);
 		try {
 			await run(exe.command, ["-d", input.distro, "-u", input.user, "--exec", "/bin/sh", "-c", CONFIG_WRITE_SCRIPT, "pideck-config", input.configDir, input.fileName], { timeoutMs, windowsHide: true, shell: false }, input.content);
 		} catch (error) {
@@ -307,14 +308,16 @@ export function createWslPiConfigStore(ports: WslPiConfigStorePorts): WslPiConfi
 			// 端口意外失败按发行版不可用处理——绝不当成本机目录继续读写。
 			throw stable(stableCodeOf(error) ?? WSL_CONFIG_CODES.distroUnavailable);
 		}
-		if (!isAbsolute(environment.windowsHome)) throw stable(WSL_CONFIG_CODES.unavailable);
+		// windowsHome 是 Windows 路径（C:\\Users\\…）：跨平台判断必须用 win32 语义。
+		if (!win32.isAbsolute(environment.windowsHome)) throw stable(WSL_CONFIG_CODES.unavailable);
 		// linuxHome 是脚本在发行版内的目标目录：必须绝对，否则 posix.join 会落到错误位置。
 		if (!environment.linuxHome.startsWith("/")) throw stable(WSL_CONFIG_CODES.unavailable);
 
 		await requireDirectory(linuxPathToWslUnc("/", profile.distro), WSL_CONFIG_CODES.distroUnavailable);
 		await requireDirectory(environment.windowsHome, WSL_CONFIG_CODES.pathUnreadable);
 		return {
-			configDir: join(environment.windowsHome, ".pi", "agent"),
+			// Windows 路径拼接必须用 win32.join：posix join 会产出 `C:\\Users\\x/.pi/agent` 混合分隔符。
+			configDir: win32.join(environment.windowsHome, ".pi", "agent"),
 			linuxConfigDir: posix.join(environment.linuxHome, ".pi", "agent"),
 			profile,
 		};
@@ -432,7 +435,7 @@ export function createWslPiConfigStore(ports: WslPiConfigStorePorts): WslPiConfi
 			requireSupportedPlatform();
 			const file = fileKeyOf(input.file);
 			const { configDir, profile } = await resolveCached(input.hostId);
-			return snapshotOf(profile, file, await readFileData(join(configDir, `${file}.json`), file));
+			return snapshotOf(profile, file, await readFileData(win32.join(configDir, `${file}.json`), file));
 		},
 		async saveModels(input) {
 			requireSupportedPlatform();
@@ -446,7 +449,7 @@ export function createWslPiConfigStore(ports: WslPiConfigStorePorts): WslPiConfi
 			requireSupportedPlatform();
 			if (!isRecord(input.settings)) throw stable(WSL_CONFIG_CODES.fileInvalid);
 			const resolved = await resolve(input.hostId);
-			const path = join(resolved.configDir, "settings.json");
+			const path = win32.join(resolved.configDir, "settings.json");
 			// 锁外重读 + 合并：与本地 saveSettingsConfig 一样，资源类键以磁盘为准，
 			// 页面的整份快照不能把别处刚写入的 packages/extensions 静默回退。
 			const current = await readFileData(path, "settings");

@@ -45,6 +45,7 @@ function newManager() {
 			get: (projectId) => ({ id: projectId, name: `proj ${projectId}`, path: `C:\\${projectId}`, lastOpenedAt: 0 }),
 		},
 		() => ({}), // getSettings：无 WSL
+		"win32", // 平台：候选表固定为 Windows，断言 pwsh 编号与平台无关
 	);
 }
 

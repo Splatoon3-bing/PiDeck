@@ -17,7 +17,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { win32 } from "node:path";
 import { normalize as normalizeLinux } from "node:path/posix";
 import { opFail, opOk, type Op } from "../../shared/op";
 import { WSL_DIRECTORY_CODES, type WslDirectoryPage } from "../../shared/types/wslDirectory";
@@ -99,7 +99,8 @@ const defaultExec: WslDirectoryExec = (args, options) =>
 	new Promise((resolve, reject) => {
 		const exe = getWslExe();
 		// shell 回退会把 & | 变成命令语法：宁可失败，也不经 shell。绝对路径缺失直接拒（与配置写端口同口径）。
-		if (exe.shell || (isAbsolute(exe.command) && !existsSync(exe.command))) {
+		// wsl.exe 是 Windows 路径：跨平台判定必须用 win32 语义（posix isAbsolute 在 Linux 上恒 false）。
+		if (exe.shell || (win32.isAbsolute(exe.command) && !existsSync(exe.command))) {
 			reject(new Error("WSL_EXE_UNAVAILABLE"));
 			return;
 		}

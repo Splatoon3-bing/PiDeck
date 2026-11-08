@@ -87,13 +87,15 @@ export class LocalTerminalSessionLauncher {
 	constructor(
 		private readonly getSettings: () => TerminalWslSettings = () => ({}),
 		private readonly log: (message: string) => void = () => undefined,
+		/** 平台可注入：测试用固定平台锁候选表，生产默认取真实平台。 */
+		private readonly platform: NodeJS.Platform = process.platform,
 	) {}
 
 	candidates(override?: TerminalWslSettings): TerminalShellCandidate[] {
-		const candidates = getTerminalShellCandidates(process.platform, process.env);
+		const candidates = getTerminalShellCandidates(this.platform, process.env);
 		// 显式传入项目 WSL 档案时优先；未传时由管理器决定是否提供全局默认（生产装配传空）。
 		const settings = override ?? this.getSettings();
-		if (process.platform !== "win32" || !settings.wslEnabled || !settings.wslDistro || !settings.wslUser) {
+		if (this.platform !== "win32" || !settings.wslEnabled || !settings.wslDistro || !settings.wslUser) {
 			return candidates;
 		}
 		const wslExe = getWslExe();

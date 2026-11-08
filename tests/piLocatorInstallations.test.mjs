@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { join, resolve as resolvePath, sep } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { createTsSandbox } from "./helpers/createTsSandbox.mjs";
@@ -64,10 +64,34 @@ function createHarness(options) {
 		callback(null, version, "");
 	};
 
+	// 开发机可能装过系统级 pi（本机就有 /usr/local/bin/pi）：只屏蔽这些真实系统安装目录，
+	// 其余路径（临时 home、/bin/bash、/usr/bin/env 等登录 shell 探测依赖）仍走真实 fs。
+	const hiddenSystemPi = (value) => {
+		const abs = resolvePath(String(value));
+		return abs.startsWith(`${sep}usr${sep}local${sep}bin${sep}`) || abs === `${sep}usr${sep}bin${sep}pi` || abs.startsWith(`${sep}opt${sep}homebrew${sep}bin${sep}pi`);
+	};
+	const enoent = () => {
+		throw Object.assign(new Error("ENOENT: hidden system pi path"), { code: "ENOENT" });
+	};
+	const guardPath =
+		(fn, fallback) =>
+		(value, ...rest) =>
+			hiddenSystemPi(value) ? fallback(value, ...rest) : fn(value, ...rest);
 	const load = createTsSandbox({
 		stubs: {
 			electron: { app: { getPath: (name) => (name === "home" ? home : name === "userData" ? userData : join(root, name)) } },
 			"node:child_process": { execFile },
+			"node:fs": {
+				existsSync: guardPath(existsSync, () => false),
+				statSync: guardPath(statSync, enoent),
+				lstatSync: guardPath(lstatSync, enoent),
+				realpathSync: guardPath(realpathSync, enoent),
+				readFileSync: guardPath(readFileSync, enoent),
+				readdirSync: guardPath(readdirSync, () => []),
+				openSync: guardPath(openSync, enoent),
+				readSync,
+				closeSync,
+			},
 		},
 		globals: {
 			process: { platform: options.platform ?? process.platform, env: { PATH: "", SHELL: "/bin/bash", ...(options.env ?? {}) } },
