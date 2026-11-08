@@ -17,9 +17,37 @@ async function connectClient(url, token) {
 	return { client, transport };
 }
 
+/**
+ * 平台无关的 CUA engine 替身。
+ *
+ * 只有会枚举窗口/屏幕的**只读**方法依赖 Win32 bindings，它们在 Linux/macOS 上直接抛
+ * 「CUA Win32 bindings unavailable」，让 MCP 契约测试变成平台能力探针。这里只覆盖
+ * listWindows/getDisplay/getVirtualDesktop/getForegroundWindow；写动作（click/type/scroll）
+ * 保留真 CuaEngine——审批门禁在 Win32 注入之前就返回，被拒时不会碰到 bindings，
+ * 换掉它们反而会把「无审批拒绝写入」这条安全断言从被测路径上拿掉。
+ */
+function fakeEngine(gate) {
+	const engine = new CuaEngine({ defaultDelayMs: 0 }, gate);
+	const windows = [
+		{
+			window: { hwnd: 1, title: "Visible", pid: 100, rect: { x: 0, y: 0, width: 800, height: 600 }, isVisible: true, isForeground: true, isTopmost: false, zIndex: 0 },
+			visibleRects: [{ x: 0, y: 0, width: 800, height: 600 }],
+		},
+		{
+			window: { hwnd: 2, title: "Hidden", pid: 101, rect: { x: 900, y: 900, width: 100, height: 100 }, isVisible: false, isForeground: false, isTopmost: false, zIndex: 1 },
+			visibleRects: [],
+		},
+	];
+	engine.listWindows = (includeInvisible = false) => windows.filter((entry) => includeInvisible || entry.window.isVisible);
+	engine.getDisplay = () => ({ width: 1920, height: 1080 });
+	engine.getVirtualDesktop = () => ({ x: 0, y: 0, width: 1920, height: 1080 });
+	engine.getForegroundWindow = () => windows[0];
+	return engine;
+}
+
 test("CUA MCP HTTP host exposes tools and denies writes without approval handler", async () => {
 	const gate = new CuaGate({ enabled: true });
-	const engine = new CuaEngine({ defaultDelayMs: 10 }, gate);
+	const engine = fakeEngine(gate);
 	const host = new CuaMcpHttpHost({ port: 0, authToken: "test-token" }, { engine, gate });
 
 	const port = await host.start();
@@ -182,7 +210,7 @@ test("type schema rejects text exceeding the length cap", async () => {
 
 test("list_windows includeInvisible superset covers visible-only listing", async () => {
 	const gate = new CuaGate({ enabled: true });
-	const engine = new CuaEngine({ defaultDelayMs: 10 }, gate);
+	const engine = fakeEngine(gate);
 	const host = new CuaMcpHttpHost({ port: 0, authToken: "tok" }, { engine, gate });
 	await host.start();
 
