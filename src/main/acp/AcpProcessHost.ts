@@ -103,8 +103,9 @@ function waitForExit(proc: import("node:child_process").ChildProcess, timeoutMs:
  */
 export async function shutdownAcpProcess(proc: import("node:child_process").ChildProcess, options: { platform?: NodeJS.Platform; gracefulExitMs?: number } = {}): Promise<void> {
 	if (hasExited(proc)) return;
-	if ((options.platform ?? process.platform) !== "win32") {
-		killAcpProcessTree(proc);
+	const platform = options.platform ?? process.platform;
+	if (platform !== "win32") {
+		killAcpProcessTree(proc, platform);
 		return;
 	}
 	try {
@@ -113,7 +114,7 @@ export async function shutdownAcpProcess(proc: import("node:child_process").Chil
 		/* 管道已关闭：照常等宽限/强杀 */
 	}
 	if (await waitForExit(proc, options.gracefulExitMs ?? ACP_GRACEFUL_EXIT_MS)) return;
-	killAcpProcessTree(proc);
+	killAcpProcessTree(proc, platform);
 }
 
 /**
@@ -121,8 +122,8 @@ export async function shutdownAcpProcess(proc: import("node:child_process").Chil
  * 进程，CLI 孙进程成为孤儿（opencode 实测残留）；taskkill /T 按进程树强杀。
  * spawn 失败（taskkill 缺失等）兜底 proc.kill()——必须挂 error 监听（AGENTS 安全约束）。
  */
-export function killAcpProcessTree(proc: import("node:child_process").ChildProcess): void {
-	if (process.platform === "win32" && typeof proc.pid === "number") {
+export function killAcpProcessTree(proc: import("node:child_process").ChildProcess, platform: NodeJS.Platform = process.platform): void {
+	if (platform === "win32" && typeof proc.pid === "number") {
 		try {
 			const killer = spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
 			killer.on("error", () => {

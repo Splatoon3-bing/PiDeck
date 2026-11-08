@@ -1229,6 +1229,14 @@ export class AcpAgentManager implements SessionAgentGateway {
 		const proc = runtime.proc;
 		if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
 		runtime.proc = null;
+		// #475：停止必须先把 stdin 关掉再交给 shutdownAcpProcess。shutdownAcpProcess 在非
+		// Windows 上直接 SIGTERM（不多等宽限，见其注释），但 CLI 仍需要 EOF 才能跑完
+		// SessionEnd 类收尾；Windows 分支内部会再 end 一次（幂等，守卫见 shutdownAcpProcess）。
+		try {
+			proc.stdin?.end();
+		} catch {
+			/* 管道已关闭：照常停止 */
+		}
 		await shutdownAcpProcess(proc, { gracefulExitMs: this.deps.gracefulExitMs });
 	}
 
