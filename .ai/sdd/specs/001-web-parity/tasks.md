@@ -362,6 +362,18 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 
 ## Progress Log
 
+### 2026-11-08 — 全量红单清零（20 → 0）
+
+起点 `npm test`：16452 pass / 20 fail / 0 cancelled；收口：**16504 tests / 16477 pass / 0 fail / 27 skipped / 0 cancelled（rc=0）**。
+
+- **sessionCatalog（3）**：根因是「同一文件只有一种字节形态」没有落到 identity/磁盘探测。新增 `normalizeSessionFilePathSyntax`（按形态选 win32/posix 语义，折叠分隔符/`//`/`.`/`..`，不折大小写）供 `canonicalizeSessionPath` 使用；落盘侧另加 `healSessionPathForStorage`（只愈合 POSIX 反斜杠形态，Windows 形态保持上报字节——`C:/a/b` 与 `C:\a\b` 等价但侧栏/回调按字节比较）。大小写变体只在 Windows 成立，测试按 `process.platform` 门控并写明理由。
+- **cua/CuaMcpHttpHost（2）**：MCP 契约不依赖 Win32 bindings。测试注入「只读方法替身 + 真 CuaEngine 写/门禁路径」的 engine；`listWindows/getDisplay/getVirtualDesktop/getForegroundWindow` 平台无关，无审批拒绝写入仍走真实 gate。
+- **acpGracefulStop（2）**：①`killAcpProcessTree` 接受 platform（原实现读 `process.platform`，注入 `"win32"` 的用例杀不到 taskkill）；②`AcpAgentManager.shutdownProcess` 在交给 `shutdownAcpProcess` 前先关 stdin（非 Windows 直接 SIGTERM 也要给 CLI EOF 跑 SessionEnd）。
+- **长尾（8）**：`securityPolicy` 的相对 allowDir 按基址形态选 win32.resolve；`localImageAccess.isInsideRoot` 按路径形态选 win32/posix relative（8.3 短名事故全在 Windows 形态）；`agentMemory/paths.canonicalPath` 对盘符/UNC 走 `win32.resolve`（`C:/p` 与 `C:\p` 同键）；`PiResourceTargetResolver` 的绝对路径判定按形态（POSIX 上 UNC 不是 `isAbsolute`）；`packageResourceResolver.readPackageVersion` 把起点是文件时的 `ENOTDIR` 当「继续向上」；`piDeckRuntimeRetryContract` 的机器语料断言改为「扩展判为瞬态必须改写 + 改写后双运行时都可重试」（原「至少救回一条」依赖本机历史）；`skillCatalog` 项目根夹具改按宿主平台构造；`webServiceHardening` 的令牌横幅文案断言跟到拆出的 `WebComposerBanner`。
+- **webLayout（5）**：已用基线 worktree 确认为既有失败，根因是重构后实现位置漂移（`manualOpen` 门控、删除会话 AlertDialog → `WebSessionDialogs`、主题求值 → `useWebSettings`、错误/待答横幅 → `WebComposerBanner`）。按用户确认「更新断言到新位置、保留同等强度」处理，未改产品行为。
+- **T14 渲染层入口**：技能/扩展弹窗新增「宿主插件」只读 tab（`listWebHostPlugins`：503 → null 只降级该 tab）；只展示 `name/version/id/description/enabled/requiresConsent/permissions`，无开关/安装/授权/执行；三语文案齐全（zh-TW 由 `genZhTwCopy` 生成）。
+- **门禁**：typecheck 0 错；check:format 0 错；`npx electron-vite build` 成功；`npx playwright test e2e/web-workbench.spec.ts` 13 passed / 1 skipped。巨文件未净增长（任务起点 931143a2c 基线 WebChatApp 1651 行、`main/index.ts` 8022 行，当前不变）。
+
 ### 2026-11-08 — 全量红单根因修复（TS loader）+ T14 只读实现
 
 - **长尾根因**：本机 Node 构建不含 TypeScript 剥离（`ERR_NO_TYPESCRIPT`），71 个测试文件直连 `import "../src/….ts"` 整体加载失败。按项目约定「生产 TS 用测试 helper」加 `tests/helpers/tsEsmLoader.mjs`（+`tsEsmHooks.mjs`，用仓库既有 `typescript` 转译；`.ts?t=` 也按 pathname 识别），接入 `npm test` / `test:serial`。**不动任何断言**：全量 fail 156 → 84（总用例 15724 → 16482，原先加载失败的文件真正跑起来了）。
