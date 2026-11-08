@@ -21,11 +21,13 @@ import {
 	collectSessionSubtreeIds,
 	getImportedSessionSourceId,
 	getSessionEnvironment,
+	healSessionPathForStorage,
 	isInSubagentArtifactsDir,
 	isUnambiguousAbsoluteSessionPath,
 	looksLikeCodexSessionFileStem,
 	looksLikePiSessionFileStem,
 	looksLikeToolMarkerTitle,
+	normalizeSessionFilePathSyntax,
 } from "../../shared/sessionIdentity";
 import { looksLikeExpandedRefBlockTitle } from "../../shared/expandedRefBlocks";
 import { createSessionModelPreference } from "../../shared/modelDisplayName";
@@ -533,11 +535,12 @@ function setLocalSessionFilePath(entry: SessionCatalogEntry, filePath: string | 
 		entry.locator = undefined;
 		return;
 	}
-	entry.filePath = filePath;
-	entry.locator = filePath
+	const normalizedPath = filePath ? healSessionPathForStorage(filePath) : undefined;
+	entry.filePath = normalizedPath;
+	entry.locator = normalizedPath
 		? sessionLocatorFromLegacy({
 				environment: entry.environment,
-				filePath,
+				filePath: normalizedPath,
 				wslDistro: entry.wslDistro,
 				wslUser: entry.wslUser,
 			})

@@ -637,19 +637,21 @@ test("keeps a draft desktop session ID after Pi assigns a file path", async () =
 			model: { provider: "openai", modelId: "gpt-test" },
 			thinkingLevel: "high",
 		});
-		// 真实文件 + 大小写变体：外部删除清理要求文件存在，同时保留「同一文件不同
-		// 大小写/分隔符写法必须折叠到同一 originKey」的原始意图（Windows CI 文件系统
-		// 大小写不敏感，existsSync 对变体路径同样成立）。
+		// 真实文件 + 分隔符变体：外部删除清理要求文件存在，同时保留「同一文件不同分隔符
+		// 写法必须折叠到同一 originKey」的原始意图。大小写变体只在 Windows 上成立——
+		// POSIX 文件名区分大小写（canonicalizeSessionPath 契约：WSL/POSIX 不折、盘符/UNC 折），
+		// 在 Linux/macOS 上 `example.jsonl` 与 `Example.jsonl` 本来就是两个文件，不能折。
 		const realPath = await realSessionFile(dir, "Example.jsonl");
+		const scannedPath = process.platform === "win32" ? realPath.toLowerCase() : realPath;
 		await catalog.attachRuntime({
 			sessionId: draft.id,
-			filePath: realPath.replace("Example.jsonl", "Example.jsonl").replace(/\//g, "\\"),
+			filePath: realPath.replace(/\//g, "\\"),
 			piSessionId: "pi-123",
 		});
 		const records = await catalog.mergeScanned("project-1", [
 			summary({
-				filePath: realPath.toLowerCase(),
-				id: realPath.toLowerCase(),
+				filePath: scannedPath,
+				id: scannedPath,
 			}),
 		]);
 		assert.equal(records.length, 1);
@@ -664,7 +666,7 @@ test("keeps a draft desktop session ID after Pi assigns a file path", async () =
 			{
 				kind: "local",
 				environment: "native",
-				filePath: realPath.toLowerCase(),
+				filePath: scannedPath,
 			},
 		);
 	} finally {
