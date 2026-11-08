@@ -9,33 +9,26 @@
  * 用法：`node --import ./tests/helpers/tsEsmLoader.mjs --test …`（已接进 npm test）。
  * 不改变测试断言与生产代码；有原生支持的 Node 上同样可用（多一次转译开销）。
  */
-import { register, registerHooks } from "node:module";
+import { register, createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
 register("./tsEsmHooks.mjs", import.meta.url);
 
 /**
- * CJS 侧同样兜底：少数测试用手写沙箱 + createRequire 直接 require(".ts")，
- * Node 的 require 不认 .ts（Unexpected token ':'）。同步 hooks 只在 require 条件下生效，
- * ESM 由上面的 async hooks 负责，互不重复。
+ * CJS 侧兜底：少数测试用手写沙箱 + createRequire 直接 require(".ts")。
+ * 不能用 module.registerHooks（同步 load 钩子对 CommonJS 必须给 source，
+ * 透传 next() 拿到 source:null 会 ERR_INVALID_RETURN_PROPERTY_VALUE，反而打挂整文件），
+ * 所以只给 require.extensions 装一个转译器——作用域仅限 require。
  */
-registerHooks({
-	load(url, context, next) {
-		let pathname = "";
-		try {
-			pathname = new URL(url).pathname;
-		} catch {
-			return next(url, context);
-		}
-		const isTs = /\.(ts|tsx|mts|cts)$/.test(pathname);
-		const isRequire = Array.isArray(context.conditions) && context.conditions.includes("require");
-		if (!isTs || !isRequire) return next(url, context);
-		const source = readFileSync(new URL(url), "utf8");
+const requireFromHere = createRequire(import.meta.url);
+for (const ext of [".ts", ".tsx", ".mts", ".cts"]) {
+	requireFromHere.extensions[ext] ??= (module, filename) => {
+		const source = readFileSync(filename, "utf8");
 		const { outputText } = ts.transpileModule(source, {
-			fileName: pathname,
+			fileName: filename,
 			compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX, isolatedModules: true },
 		});
-		return { format: "commonjs", source: outputText, shortCircuit: true };
-	},
-});
+		module._compile(outputText, filename);
+	};
+}
