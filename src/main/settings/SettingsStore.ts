@@ -1337,7 +1337,8 @@ export class SettingsStore {
 				this.firePendingSave();
 			}, SettingsStore.SAVE_DEBOUNCE_MS);
 			this.saveTimer = timer;
-			timer.unref?.();
+			// 不能 unref：save() 返回的 Promise 正等这个定时器。unref 后在无其它 active handle
+			// 的进程（测试、退出阶段）事件循环会先排空，等待永不结算（表现：update 卡住、尾随写丢）。
 		}
 		return new Promise<void>((resolve) => {
 			this.saveWaiters.push(resolve);

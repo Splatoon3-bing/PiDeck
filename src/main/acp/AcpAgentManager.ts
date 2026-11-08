@@ -969,8 +969,10 @@ export class AcpAgentManager implements SessionAgentGateway {
 		while (Date.now() < deadline) {
 			if (runtime.cancelling || runtime.status === "closed" || this.runtimes.get(runtime.tab.id) !== runtime) return;
 			await new Promise<void>((resolve) => {
-				const timer = setTimeout(resolve, Math.min(150, Math.max(0, deadline - Date.now())));
-				timer.unref?.();
+				// 这个定时器背着一个被 await 的 Promise：**不能 unref**。
+				// unref 后如果没有其它 active handle（测试、退出阶段），事件循环先排空，
+				// 等待永远不恢复——表现为“停止键没反应/回合永不结算”。
+				setTimeout(resolve, Math.min(150, Math.max(0, deadline - Date.now())));
 			});
 		}
 	}
