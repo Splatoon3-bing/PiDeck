@@ -26,7 +26,7 @@ import { WebModelSelector } from "./WebModelSheet";
 import { WebBackendSelector } from "./WebBackendSelector";
 import { WebThinkingSelector } from "./WebThinkingSelector";
 import { WebPromptPicker } from "./WebPromptPicker";
-import { useCoarsePointer, useIsMobileViewport } from "./useIsMobileViewport";
+import { useCoarsePointer, useHasFinePointer, useIsMobileViewport } from "./useIsMobileViewport";
 import { resolveComposerCollapsed } from "./composerCollapse";
 
 /** 单会话图片上限（压缩后每张约 100–300KB，4 张足够多数场景且 body 可控）。 */
@@ -92,6 +92,11 @@ export function WebComposer(props: {
 	const [focused, setFocused] = useState(false);
 	const mobileViewport = useIsMobileViewport();
 	const coarsePointer = useCoarsePointer();
+	const hasFinePointer = useHasFinePointer();
+	// 物理键盘可用时按发送快捷键设置走，不受 coarsePointer 门控：iPad+妙控键盘的
+	// `(pointer: coarse)` 仍为 true，但它有物理键盘、修饰键齐全，与纯触屏虚拟键盘
+	// 语义不同。`hasFinePointer`（`(any-hover: hover)`）区分这两种设备。
+	const keyboardSendEnabled = !coarsePointer || hasFinePointer;
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const composerRef = useRef<HTMLDivElement | null>(null);
 	const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -301,13 +306,11 @@ export function WebComposer(props: {
 							}}
 							placeholder={placeholder}
 							disabled={props.disabled}
-							/* 触屏虚拟键盘没有 Shift：Enter 一律保持默认换行，发送只走右下角按钮，
-							    避免「发送」与「换行」共用一键造成误发（2026-10 评审 P1）；
-							    桌面物理键盘按发送快捷键设置判定（与桌面端 getComposerEnterIntent 同源）。
-							    enterKeyHint 让虚拟键盘回车键直接标注行为（enter=换行 / send=发送）。 */
-							enterKeyHint={coarsePointer || (props.sendShortcut ?? "enter-send") !== "enter-send" ? "enter" : "send"}
+							/* 物理键盘可用时按发送快捷键设置走，虚拟键盘 Enter 一律换行、发送走按钮。
+						    enterKeyHint 让虚拟键盘回车键直接标注行为（enter=换行 / send=发送）。 */
+							enterKeyHint={keyboardSendEnabled && (props.sendShortcut ?? "enter-send") === "enter-send" ? "send" : "enter"}
 							onKeyDown={(event) => {
-								if (coarsePointer) return;
+								if (!keyboardSendEnabled) return;
 								if (getComposerEnterIntent(event.nativeEvent, props.sendShortcut ?? "enter-send") === "send") {
 									event.preventDefault();
 									submit();
