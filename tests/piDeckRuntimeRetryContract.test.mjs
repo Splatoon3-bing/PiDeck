@@ -211,7 +211,6 @@ function readSessionErrors() {
 test("真实会话语料：扩展改写的内容在两个运行时都必须可重试", () => {
 	const errors = readSessionErrors();
 	if (errors.length === 0) return; // 无本机会话（CI）时跳过
-	let rewrittenCount = 0;
 	for (const raw of errors) {
 		const rewritten = applyExtension({
 			role: "assistant",
@@ -219,11 +218,13 @@ test("真实会话语料：扩展改写的内容在两个运行时都必须可�
 			api: "openai-completions",
 			errorMessage: raw,
 		});
+		// 语料契约改为与扩展的纯判定对齐（原断言「至少有 1 条被改写」依赖本机历史内容：
+		// 已可重试的 503/timed out、用户中止、确定性 4xx 本来就不该改写，机器换一批会话就假红）。
+		if (extension.isTransientError(raw)) {
+			assert.ok(rewritten, `扩展判定为瞬态错误，真实语料里必须改写成可重试: ${raw}`);
+		}
 		if (!rewritten) continue;
-		rewrittenCount += 1;
 		assert.equal(dshRetries(rewritten), true, `桌面端改写后不可重试: ${raw} → ${rewritten}`);
 		assert.equal(piRetries(rewritten), true, `pi 改写后不可重试: ${raw} → ${rewritten}`);
 	}
-	// 语料存在时至少应救回一条，否则说明语料/解析变了
-	assert.ok(rewrittenCount > 0, `扫描 ${errors.length} 条错误文案，却没有一条被改写`);
 });
