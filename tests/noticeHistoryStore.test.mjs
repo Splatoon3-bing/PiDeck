@@ -161,5 +161,8 @@ it("装配层契约：退出清理登记 notice-history flush（防抖窗口内�
 	// （store 的 flush/防抖行为已有行为测试，这里只守装配配对）。
 	const indexSource = await readFile("src/main/index.ts", "utf8");
 	assert.match(indexSource, /quitCleanup\.register\(\s*["']notice-history["']\s*,[\s\S]*?noticeHistoryStore\.flush\(\)/, "退出前必须 flush NoticeHistoryStore：防抖写盘（500ms 窗口）未冲盘退出会丢最后几条通知");
-	assert.match(indexSource, /registerNoticeHistoryIpc\(noticeHistoryStore\)/, "store 实例必须保留命名并传入 IPC 装配（匿名 new 会让退出清理无处挂 flush）");
+	// 构造可以收进域工厂（路径/日志命名空间属于域细节），但必须仍绑定到具名实例：
+	// quitCleanup 的 flush 与 IPC 注册都要引用同一个实例，匿名 new 会让退出清理无处挂 flush。
+	assert.match(indexSource, /const noticeHistoryStore = createNoticeHistoryStore\(/, "store 必须绑定到具名实例（createNoticeHistoryStore 工厂可换，具名实例不可省）");
+	assert.match(indexSource, /registerNoticeHistoryIpc\([^;]*noticeHistoryStore/, "store 实例必须传入 IPC 装配，且与退出清理引用同一实例");
 });

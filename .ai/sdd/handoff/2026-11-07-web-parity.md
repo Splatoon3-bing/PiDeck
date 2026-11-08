@@ -38,83 +38,40 @@ Read the handoff file in full first. Key artifacts: .ai/sdd/specs/001-web-parity
 
 | Area | Status |
 |------|--------|
-| Phase 1A/1B（T0.1–T5） | 完成，已过发布前评审 |
-| 评审阻断项 B1–B4 + N1 | 已修（白名单 hasOwn / realpath 边界 / 审计日志 / body 413·400 / 巨文件回落） |
-| 评审非阻断项 | N2/N4/N5/N6/N9/N10 + 桌面广播 E2E + N3 限速 已修（见下） |
-| 未做 | N3 的 Origin 白名单（需产品决策：会与 LAN/隧道/移动端来源冲突）、`e2e/web-service.spec.ts` thinking/tool 基线红、T6–T15 |
-| 代码状态 | 第一批（Phase 1A/1B + 评审修复）已提交 `c6a395cda`；非阻断清理在**当前工作树未提交** |
-| NEXT | T6/T7/T8 完成（T6 部署前手动走查待做）；下一步 T9 智能体 → T10 收藏 → T13 通知 |
+| Phase 1A/1B（T0.1–T5）+ 评审修复 | 完成并提交 |
+| T6 终端 / T7 分屏 / T8 自动化 | 完成并提交 |
+| T9 智能体 | **本轮完成（未提交）**：`WebAgentRoutes` + 面板；调用走例外四 sidecar，拒收 systemPrompt |
+| T10 收藏 | **本轮完成（未提交）**：`WebFavoritesRoutes` + 面板；添加会话只收 id，来源由 catalog 填 |
+| T13 通知/公告/反馈 | **本轮完成（未提交）**：`WebNoticeRoutes` + `WebNoticeCenter`；反馈复用建会话 + 预填 |
+| T15 PWA/离线 | **本轮完成（未提交）**：三态连接（离线 vs 连接中）；SW 策略沿用既有 |
+| 未做 | T11 生图/视频、T12 远程/WSL/Worktree（需评审）、T14 宿主插件只读（需评审）；`npm test` 全量既有红单 triage；T6 部署前手动走查 |
+| 巨文件 | `WebChatApp.tsx` **1646**、`main/index.ts` **8017**（起点 1652 / 8021，均净减） |
 
-## 已完成（本轮非阻断清理）
-
-| # | 项 | 落点 |
-|---|---|---|
-| N2 | Web 改设置不再误弹「需重启」toast | `src/renderer/src/App.tsx` 广播回调 |
-| N4 | 命令面板搜索框恢复焦点环 | `WebCommandPalette.tsx` `focus-visible:ring-1` |
-| N5 | 390px 抽屉 + Git 面板无横向溢出 | `e2e/web-workbench.spec.ts` 新用例 |
-| N6 | `WebGitPanel` 422 → 369 行 | 拆出 `WebGitBranchBar.tsx`（97 行） |
-| N9 | symlink 自身删除语义（项目内 → canonical；悬空 → 403） | `tests/webWorkspaceWrites.test.mjs` |
-| N10 | `defaultAgentBackendDesktopOnly`：acp/生图不再伪装成 pi | `WebSettingsProjection.ts` + 面板禁用 + i18n 三语 |
-| N-t | 桌面广播即时性 E2E（Web POST → 桌面 `data-theme`） | `e2e/web-settings.spec.ts` 新用例 |
-| N3 | 写路由限速 240/分钟/主体 → 429 + `Retry-After` | `src/main/web/WebRateLimit.ts` + `WebServiceManager` |
-
-## Remaining（下一阶段）
-
-| 项 | 说明 |
-|---|---|
-| N3 Origin 白名单 | 需先定策略（LAN/隧道/移动端来源多变）；当前 CORS 仍为 `*`，只做了写限速 |
-| `e2e/web-service.spec.ts` thinking/tool | HEAD 基线既有失败，需单独排查 thinking 帧卡片渲染，与 Phase 1 无关 |
-| T6 终端 | 默认关闭 + WebSocket + 会话归属 + 并发/缓冲上限；**先安全评审** |
-| T7–T15 | 分屏/自动化/智能体/收藏/生图/远程/通知/PWA，见 tasks.md |
-
-## 验证（非阻断清理轮）
+## 本轮验证证据（本机实跑）
 
 - `npm run typecheck` → 0 错
-- 针对性单测 15 个文件 → **150 pass / 0 fail**
-- `npx electron-vite build` → 通过
-- 三条 Web E2E → **11 passed / 1 skipped**
-- `npm run check:format` → 通过
+- 针对性单测：`webAgentRoutes` / `webFavoritesRoutes` / `webNoticeRoutes` / `webAutomationRoutes` / `webConnectivity` / `webSessionRoute` = **28 条全绿**（分批跑合计 22–58 条，均 0 fail）
+- `npx playwright test e2e/web-workbench.spec.ts` → **13 passed / 1 skipped**（新增：智能体 编辑/绑定/删除、收藏 保存/搜索/跳回、通知中心→反馈建会话、离线/恢复）
+- `npm run check:format` → 通过；`npx electron-vite build` → 通过（改渲染层后 E2E 必须重建，否则页面仍旧 bundle）
 
-## Failed approaches（避免重复）
+## 本轮踩坑（已修复，勿重犯）
 
-- 不要把 `test.skip(...)` 放测试文件顶层（会跳过整个文件），必须放测试体内。
-- 不要让 Web 收到宿主绝对路径：草稿本/文件管理只传 `(scope,id)` / 项目相对路径。
-- 不要给 Radix 菜单/对话框套 `drawer` 作用域查询（portal 到 body），E2E 用 `page.getByRole`。
-- 不要用 8765 跑 E2E（本机 `pideck.service` 常驻）：web-service 用 8878、settings 用 8879、commands/workbench 各自端口。
-- **不要把延迟赋值的单例按值传进装配**：`scratchPadService` 是模块级 `let`，Web 装配可能早于赋值；`registerWebRoutes` 用 provider `scratchPad: () => scratchPadService` 延迟读取（按值传会得到 `reading 'create'` 的 400）。
-- 源码契约测试跟着结构走：`webSessionRoute` 原先断言 WebChatApp 内联三段 effect，已改为「组合根接线 hook + hook 内含逻辑」，不要为消红删断言。
+- **`sessionCatalog` 是启动后段赋值的模块级 `let`**：按值传进 `webDomainProviders` → 运行期 `catalog.get` 报 `Cannot read properties of undefined (reading 'get')`，同时打挂智能体绑定与收藏添加。所有延迟赋值 store/catalog 一律传 getter，收口在 `src/main/web/webStoreProviders.ts`。
+- **改渲染层后不重建就复跑 E2E 会误判**：抽屉入口整体失效的假象就是旧 bundle；门禁顺序固定为 build → E2E。
+- E2E 列表项定位要收敛到 `li` 行（面板里同名按钮会出现多个），否则 strict mode violation。
+- 领域装配细节（notice 历史路径/日志命名空间）收回域工厂 `createNoticeHistoryStore`，`main/index.ts` 只留一行，避免巨文件回涨。
 
-## Verification evidence（评审轮，全部本机实跑）
+## 剩余任务
 
-- `npm run typecheck` → 0 错
-- 针对性单测 14 个文件 → **145 pass / 0 fail**（含新增：白名单原型键 6 例、symlink 逃逸 3 例、超限 413 / 非法 JSON 400）
-- `npx electron-vite build` → 通过
-- `npx playwright test e2e/web-workbench.spec.ts e2e/web-settings.spec.ts e2e/web-commands.spec.ts` → **9 passed / 1 skipped**（visual 手动）
-- `npm run check:format` → 通过；`npm run check:ipc-wiring` → ok（815 通道）
-- `e2e/web-service.spec.ts` thinking/tool → **HEAD 基线同样失败**（独立 worktree `git worktree add /tmp/... HEAD` + 仅改端口后复现）
-
-## Artifacts
-
-| Artifact | Path | Why |
+| # | 任务 | 要点 |
 |---|---|---|
-| Spec | `.ai/sdd/specs/001-web-parity/{requirements,design,tasks}.md` | FR/NFR、设计、任务与 Progress Log（评审轮在最上方） |
-| 设置白名单 | `src/main/web/WebSettingsProjection.ts` | 唯一事实来源（写权限 = 键集） |
-| 设置路由 | `src/main/web/WebSettingsRoutes.ts` + `src/main/settings/settingsBroadcast.ts` | 投影/写入 + 桌面广播 |
-| 工作区写路由 | `src/main/web/WebWorkspaceRoutes.ts` | 文件/Git/草稿本边界 + 审计日志 |
-| Web 装配 | `src/main/web/registerWebRoutes.ts` | 能力注入（新增域在这里加，不要回填 main/index.ts） |
-| Web 组合根 | `src/renderer/src/web/WebChatApp.tsx` | 只装配；导航/标签副作用在 `useWebSessionNavigation.ts` |
-| 架构规则 | `docs/architecture.md` | 目录/依赖/IPC/巨文件纪律 |
-| UI 规则 | `docs/ui-and-css.md` | 焦点环/移动端 token |
-| 项目规则 | `AGENTS.md` | 门禁、提交与部署 |
+| T11 | 生图/生视频 | 供应商配置只在主进程；Web 只传 prompt/参数/参考图；进度与产物 |
+| T12 | 远程/WSL/Worktree | 先扩展 locator 投影与路径/权限边界，**单独安全评审** |
+| T14 | 宿主插件（只读） | 只读安全投影；安装/执行/权限提升不开放（需安全评审） |
+| — | 全量红单 | 按文件 triage，对照基线 `3744a3593` 区分既有/新增 |
 
-## Policy / safety notes
+## Uncommitted files（本轮）
 
-- 设置只走白名单；不得暴露 token、密钥、凭据、宿主绝对路径。
-- 文件操作只在项目根内（realpath + symlink 检查），删除走回收站，拒绝删除项目根。
-- Git 分支名校验走 `assertBranchName` + `git check-ref-format`；脏工作区 409，force 需用户确认。
-- 不自动提交、不自动部署；部署会重启 `pideck.service` 并中断会话，需明确授权。
+- 新增：`src/main/web/{WebAgentRoutes,WebFavoritesRoutes,WebNoticeRoutes,registerWebDomainRoutes,webStoreProviders}.ts`、`src/renderer/src/web/{WebAgentPanel,WebFavoritesPanel,WebNoticeCenter,useWebAppUpdate,useWebWorkspaceController,webConnectivity}.ts(x)`、`tests/web{AgentRoutes,FavoritesRoutes,NoticeRoutes,Connectivity}.test.mjs`、`.ai/sdd/specs/001-web-parity/t{9-agents,t10-favorites}-web-slice.md`
+- 修改：`src/main/index.ts`、`src/main/notices/NoticeHistoryStore.ts`、`src/main/web/{WebServiceManager,registerWebRoutes}.ts`、`src/renderer/src/web/{WebChatApp,WebHeader,WebSidebar,WebWorkspaceDrawer,webApi}.tsx?`、i18n 三份、`e2e/web-workbench.spec.ts`、`.ai/sdd/{INDEX.md,specs/001-web-parity/tasks.md}`
 
-## Uncommitted files（本任务累积，全部未提交）
-
-- 新增：`.ai/sdd/**`、`src/main/web/registerWebRoutes.ts`、`src/main/web/WebSettingsProjection.ts`、`src/main/web/WebSettingsRoutes.ts`、`src/main/settings/settingsBroadcast.ts`、`src/main/scratchPad/`、`src/renderer/src/web/{useWebSessionNavigation,useWebSettings,webCommandList,webCommands,webSessionTabs}.ts`、`src/renderer/src/web/{WebCommandPalette,WebComposerBanner,WebFileEditor,WebFilesPanel,WebGitPanel,WebNotesPanel,WebSessionTabs,WebSettingsPanel}.tsx`、`src/renderer/src/hooks/appearance/fontSizeAttributes.ts`、`e2e/web-{workbench,settings,commands}.spec.ts`、`tests/{scratchPadService,webCommands,webSessionTabs,webSettingsRoutes,webWorkspaceWrites}.test.mjs`
-- 修改：`src/main/index.ts`、`src/main/web/WebWorkspaceRoutes.ts`、`src/main/web/WebServiceManager.ts`、`src/main/ipc/scratchPadIpc.ts`、`src/renderer/src/web/WebChatApp.tsx` 等 Phase 1A/1B 文件、`src/shared/types/settings.ts`、i18n 三份、`tests/webSessionRoute.test.mjs`、`docs/unified-api.md`、`e2e/web-service.spec.ts`

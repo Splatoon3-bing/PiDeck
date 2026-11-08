@@ -6,7 +6,7 @@
  * 运行态来自 useChat status（submitted/streaming）与轮询的 runtime.status 兜底。
  */
 import { useState } from "react";
-import { AlertCircle, Check, ClipboardCopy, Clock, Columns2, Command, Copy, Download, EllipsisVertical, FileDown, FoldVertical, GitFork, Menu, Monitor, Moon, PanelRight, Pencil, Puzzle, RefreshCw, RotateCw, Search, Settings, Sun, Target, Trash2 } from "lucide-react";
+import { AlertCircle, Bell, Check, ClipboardCopy, Clock, Columns2, Command, Copy, Download, EllipsisVertical, FileDown, FoldVertical, GitFork, Menu, Monitor, Moon, PanelRight, Pencil, Puzzle, RefreshCw, RotateCw, Search, Settings, Sun, Target, Trash2 } from "lucide-react";
 import type { AgentBackend, WebSecurityState } from "../../../shared/types";
 import type { UsageProbeBackend } from "../../../shared/types/providerUsage";
 import { Button } from "@/components/ui-shadcn/button";
@@ -93,6 +93,8 @@ export function WebHeader(props: {
 	canInstall?: boolean;
 	onInstall?: () => void;
 	onOpenAssets?: () => void;
+	/** 通知中心：公告 / 通知历史 / 反馈入口。 */
+	onOpenNotices?: () => void;
 	/** 全局设置面板（外观/会话默认/输入行为）。移动端入口也在 ⋮ 菜单里。 */
 	onOpenSettings?: () => void;
 	/** 命令面板（移动端无物理键盘，必须有一个菜单入口）。 */
@@ -103,7 +105,32 @@ export function WebHeader(props: {
 	onToggleSplit?: () => void;
 	headerHidden?: boolean;
 }) {
-	const { title, status, onOpenSidebar, backend, acpToolId, acpTools, contextUsage, usageProvider, usageBackend, permissionPreset, actions, onOpenDshTools, onOpenSearch, themePreference, onCycleTheme, canInstall, onInstall, onOpenAssets, onOpenSettings, onOpenCommands, splitActive, canSplit, onToggleSplit } = props;
+	const {
+		title,
+		status,
+		onOpenSidebar,
+		backend,
+		acpToolId,
+		acpTools,
+		contextUsage,
+		usageProvider,
+		usageBackend,
+		permissionPreset,
+		actions,
+		onOpenDshTools,
+		onOpenSearch,
+		themePreference,
+		onCycleTheme,
+		canInstall,
+		onInstall,
+		onOpenAssets,
+		onOpenNotices,
+		onOpenSettings,
+		onOpenCommands,
+		splitActive,
+		canSplit,
+		onToggleSplit,
+	} = props;
 	// 上下文详情弹层：移动端无悬停 title 提示，环必须可点开详情（对齐桌面 SessionContextMeter 点开面板语义）。
 	const [contextSheetOpen, setContextSheetOpen] = useState(false);
 	// DSH 权限预设：图标按统一保护强度语义取（#214 与桌面 DshPermissionMenu 同源），
@@ -116,7 +143,7 @@ export function WebHeader(props: {
 	// 2026-10 评审：会话动作与全局入口原是两个相邻溢出菜单（横…/竖⋮），触屏没有 tooltip，
 	// 「重命名在哪个菜单里」全靠背。合并为一个 ⋮ 菜单，内部用标签分「会话/应用」两组。
 	const hasSessionMenuActions = Boolean(actions && (actions.onRename || actions.onRestart || actions.onCompact || actions.onClone || actions.onCopyMarkdown || actions.onExportHtml || actions.onDuplicate || actions.onDelete || actions.onRefreshMessages));
-	const hasGlobalMenuEntries = Boolean(onOpenSearch || (onToggleSplit && canSplit) || onCycleTheme || (canInstall && onInstall) || onOpenAssets || onOpenSettings || onOpenCommands);
+	const hasGlobalMenuEntries = Boolean(onOpenSearch || (onToggleSplit && canSplit) || onCycleTheme || (canInstall && onInstall) || onOpenAssets || onOpenNotices || onOpenSettings || onOpenCommands);
 	// 头部固定单行：标题+状态占左侧，右侧动作收敛后窄屏不再换行错位（全局入口收进溢出菜单）。
 	return (
 		<>
@@ -289,6 +316,12 @@ export function WebHeader(props: {
 													<DropdownMenuItem onClick={onInstall}>
 														<Download className="size-4" aria-hidden="true" />
 														{t("web.installApp")}
+													</DropdownMenuItem>
+												) : null}
+												{onOpenNotices ? (
+													<DropdownMenuItem onClick={onOpenNotices}>
+														<Bell className="size-4" aria-hidden="true" />
+														{t("web.noticeCenter")}
 													</DropdownMenuItem>
 												) : null}
 												{onOpenAssets ? (

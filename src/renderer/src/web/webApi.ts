@@ -15,6 +15,9 @@ import type { WebSecurityState } from "../../../shared/types";
 import type { SafeWebSettings, WebWritableSettings } from "../../../shared/types";
 import type { AutomationCronPreview, CreateAutomationTaskInput, UpdateAutomationTaskInput, WebAutomationRun, WebAutomationSnapshot, WebAutomationTask } from "../../../shared/types";
 import type { WebContextUsage, WebFileNodeLite, WebState } from "./webTypes";
+import type { AgentInvokeInput, AgentProfile } from "../../../shared/types/agentProfile";
+import type { WebAgentSnapshot } from "../../../main/web/WebAgentRoutes";
+import type { FavoriteEntry } from "../../../shared/types/favorites";
 
 // Web 服务令牌：与 browserApi 同型（同一 localStorage key），从二维码/分享链接的 ?token= 读取一次并持久化。
 // 之后所有请求统一带 Authorization: Bearer；环回绑定服务端不校验，无令牌时照常工作。
@@ -30,6 +33,11 @@ if (typeof window !== "undefined") {
 /** 请求注入用的鉴权头；无令牌时返回空对象（环回绑定不校验，省略即可）。 */
 export function getWebAuthHeaders(): Record<string, string> {
 	return webToken ? { authorization: `Bearer ${webToken}` } : {};
+}
+
+/** 生图产物地址：`<img>` 不能带 Authorization，GET 走 `?token=`（与 SSE 同一套令牌链）。 */
+export function webImageBlobUrl(ref: string): string {
+	return `/api/imagegen/blob/${encodeURIComponent(ref)}${webToken ? `?token=${encodeURIComponent(webToken)}` : ""}`;
 }
 
 /** 当前令牌（SSE 类连接用：EventSource 无法携带 Authorization header，只能拼 query）。 */
@@ -289,9 +297,14 @@ export function chatMessagesToUiMessages(messages: ChatMessage[]): UIMessage[] {
 		}
 		// P2：历史用户图片 → file part（data URL）。超大数据防护：单张 >4MB 直接跳过
 		// （页端已有界，这里只防异常大图拖垮渲染层）。
-		if (role === "user" && Array.isArray(message.images)) {
+		if (Array.isArray(message.images)) {
 			for (const image of message.images) {
-				if (image?.type !== "image" || typeof image.mimeType !== "string" || typeof image.data !== "string") continue;
+				if (image?.type !== "image" || typeof image.mimeType !== "string") continue;
+				// 生图历史只存 ref（base64 不进 JSONL）：展示走主进程 blob 路由，不把字节塞回消息对象。
+				if (typeof image.data !== "string" || !image.data) {
+					if (typeof image.ref === "string" && image.ref) parts.push({ type: "file", mediaType: image.mimeType, url: webImageBlobUrl(image.ref) } as unknown as UIMessage["parts"][number]);
+					continue;
+				}
 				if (image.data.length > 4 * 1024 * 1024) continue;
 				parts.push({ type: "file", mediaType: image.mimeType, data: `data:${image.mimeType};base64,${image.data}` } as unknown as UIMessage["parts"][number]);
 			}
@@ -971,4 +984,60 @@ export async function clearWebAutomationRuns(): Promise<number> {
 
 export function previewWebAutomationCron(expression: string): Promise<AutomationCronPreview> {
 	return automationRequest<AutomationCronPreview>(`/api/automations/preview-cron?expression=${encodeURIComponent(expression)}`);
+}
+
+// ── 智能体（T9）：systemPrompt 只允许由主进程从预设读取，调用入参不含它 ──
+async function agentRequest<T>(path: string, body?: unknown): Promise<T> {
+	const res = await apiFetch(path, body === undefined ? undefined : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+		throw new Error(payload?.message ?? `agent ${res.status}`);
+	}
+	return (await res.json()) as T;
+}
+export function fetchWebAgents(): Promise<WebAgentSnapshot> {
+	return agentRequest<WebAgentSnapshot>("/api/agents");
+}
+export async function saveWebAgent(input: Record<string, unknown>, agentId?: string): Promise<AgentProfile> {
+	const payload = await agentRequest<{ agent: AgentProfile }>(agentId ? "/api/agents/update" : "/api/agents/create", agentId ? { agentId, patch: input } : input);
+	return payload.agent;
+}
+export function deleteWebAgent(agentId: string): Promise<unknown> {
+	return agentRequest("/api/agents/delete", { agentId });
+}
+export function bindWebAgent(sessionId: string, agentId: string | null): Promise<{ sessionAgentBindings: Record<string, string> }> {
+	return agentRequest("/api/agents/bind-session", { sessionId, agentId });
+}
+export function invokeWebAgent(input: AgentInvokeInput): Promise<{ runId: string }> {
+	return agentRequest("/api/agents/invoke", input);
+}
+export function cancelWebAgent(runId: string): Promise<unknown> {
+	return agentRequest("/api/agents/invoke/cancel", { runId });
+}
+export async function fetchWebFavorites(): Promise<FavoriteEntry[]> {
+	return (await agentRequest<{ entries: FavoriteEntry[] }>("/api/favorites")).entries;
+}
+export function addWebSessionFavorite(sessionId: string): Promise<unknown> {
+	return agentRequest("/api/favorites/add-session", { sessionId });
+}
+export function deleteWebFavorite(favoriteId: string): Promise<unknown> {
+	return agentRequest("/api/favorites/delete", { favoriteId });
+}
+
+// ── 通知 / 公告（T13）：投影只含公告正文与已读 id，notifiedIds 是终端本机簿记不下发 ──
+export type WebAnnouncementState = { items: import("../../../shared/types/announcement").AnnouncementItem[]; readIds: string[]; fetchedAt: number | null; source: "remote" | "cache" | "builtin" };
+export function fetchWebNotices(): Promise<import("../../../shared/types/noticeHistory").NoticeHistoryFileEntry[]> {
+	return agentRequest<{ entries: import("../../../shared/types/noticeHistory").NoticeHistoryFileEntry[] }>("/api/notices").then((payload) => payload.entries);
+}
+export function clearWebNotices(): Promise<unknown> {
+	return agentRequest("/api/notices/clear", {});
+}
+export function fetchWebAnnouncements(): Promise<WebAnnouncementState> {
+	return agentRequest<WebAnnouncementState>("/api/announcements");
+}
+export function markWebAnnouncementRead(id: string): Promise<unknown> {
+	return agentRequest("/api/announcements/mark-read", { id });
+}
+export function markAllWebAnnouncementsRead(): Promise<unknown> {
+	return agentRequest("/api/announcements/mark-all-read", {});
 }

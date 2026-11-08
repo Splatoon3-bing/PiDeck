@@ -21,6 +21,7 @@ import { useIsMobileViewport } from "./useIsMobileViewport";
 import { WEB_SIDEBAR_INITIAL_VISIBLE, growSidebarWindow, resolveSidebarWindow } from "./webSidebarPaging";
 import { groupWebSessionsByParent } from "./webSidebarSessions";
 import { cn } from "@/lib/utils";
+import { resolveConnectionPhase, useBrowserOnline } from "./webConnectivity";
 import { isActiveSessionStatus, sessionStatusDotClass } from "@/agentListDisplay";
 import { WebBackendMark } from "./WebBackendMark";
 import type { WebAcpTool, WebProject, WebRuntime, WebSession, WebState } from "./webTypes";
@@ -269,6 +270,8 @@ export function WebSidebar(props: {
 	onApplyUpdate?: () => void;
 }) {
 	const { state, activeSessionId, creatingProjectId, connected, mobileOpen } = props;
+	// 三态：设备离线 ≠ 服务端不可达（后者只该显示「连接中」）。
+	const phase = resolveConnectionPhase(connected, useBrowserOnline());
 	const [search, setSearch] = useState("");
 	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
 	const [addingProject, setAddingProject] = useState(false);
@@ -483,9 +486,9 @@ export function WebSidebar(props: {
 				{/* 底栏连接状态：px-2 与侧栏主体同缘 */}
 				<div className="toolbar-actions sidebar-bottom-actions flex shrink-0 items-center gap-0.5 border-t border-border px-2 py-1">
 					<div className="flex min-w-0 flex-1 items-center gap-2 text-caption text-muted-foreground">
-						{/* 连接态语义色：已连接=success 绿（主色 ink 在新语义档下读不出「通」），连接中=warning */}
-						<span className={cn("size-1.5 shrink-0 rounded-full", connected ? "bg-success" : "bg-warning")} aria-hidden="true" />
-						<span className="truncate">{connected ? t("web.connected") : t("web.connecting")}</span>
+						{/* 连接态语义色：已连接=success 绿（主色 ink 在新语义档下读不出「通」），连接中/离线=warning */}
+						<span className={cn("size-1.5 shrink-0 rounded-full", phase === "online" ? "bg-success" : "bg-warning")} aria-hidden="true" />
+						<span className="truncate">{t(phase === "online" ? "web.connected" : phase === "offline" ? "web.offline" : "web.connecting")}</span>
 						{/* 前端自更新：重建后旧 bundle 已不存在，不能让页面自己刷新（会直接 404）；
 						    只在底栏亮提示，点「更新」才重载。ml-auto 把这一组顶到右端。 */}
 						<span className="ml-auto flex shrink-0 items-center gap-1.5">

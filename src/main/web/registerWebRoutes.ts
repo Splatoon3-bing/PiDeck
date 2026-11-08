@@ -27,15 +27,15 @@ import { evaluateUserReadAccess } from "../security/policy";
 import type { SkillManager } from "../skills/SkillManager";
 import type { WebServiceManager } from "./WebServiceManager";
 import { WebTerminalRoutes } from "./WebTerminalRoutes";
-import { WebAutomationRoutes } from "./WebAutomationRoutes";
+import { registerWebDomainRoutes, type WebDomainRouteDeps } from "./registerWebDomainRoutes";
 import type { AutomationStore } from "../automation/AutomationStore";
 import type { AutomationRunCoordinator } from "../automation/AutomationRunCoordinator";
 import { WebWorkspaceRoutes } from "./WebWorkspaceRoutes";
 import { createWebSettingsRoutes } from "./WebSettingsRoutes";
 
-export type WebRoutesRegistration = {
+export type WebRoutesRegistration = WebDomainRouteDeps & {
 	/** Web 服务实例：写三个注入点（workspaceRoutes / settingsRoutes / terminalRoutes）。 */
-	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes" | "terminalRoutes" | "automationRoutes">;
+	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes" | "terminalRoutes" | "automationRoutes" | "agentRoutes" | "favoriteRoutes" | "noticeRoutes" | "imageGenRoutes">;
 	projects: { list: () => Project[]; get: (projectId: string) => Project | undefined };
 	git: GitService;
 	files: FileSystemService;
@@ -197,11 +197,5 @@ export function registerWebRoutes(deps: WebRoutesRegistration): void {
 		},
 	});
 	deps.target.terminalRoutes = terminalRoutes;
-	// 自动化（T8）：只做投影/白名单/归属校验，读写都复用 AutomationStore / RunCoordinator。
-	deps.target.automationRoutes = new WebAutomationRoutes({
-		store: deps.automation.store,
-		runs: deps.automation.runs,
-		// 同样要重新绑定：ProjectStore.get 依赖 this（与终端 manager 的坑同源）。
-		projects: { get: (projectId) => deps.projects.get(projectId) },
-	});
+	registerWebDomainRoutes(deps.target, deps);
 }

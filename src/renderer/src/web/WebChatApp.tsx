@@ -31,7 +31,8 @@ import { WebComposerBanner, WebAuthExpiredBanner } from "./WebComposerBanner";
 import { WebDshToolsPanel } from "./WebDshToolsPanel";
 import { WebBranchBar } from "./WebBranchBar";
 import { useWebSessionRoute, useWebTabSync } from "./useWebSessionNavigation";
-import { WebWorkspaceDrawer, useWorkspacePanel } from "./WebWorkspaceDrawer";
+import { WebWorkspaceDrawer } from "./WebWorkspaceDrawer";
+import { useWebWorkspaceController } from "./useWebWorkspaceController";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui-shadcn/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui-shadcn/dialog";
 import { Button } from "@/components/ui-shadcn/button";
@@ -48,7 +49,6 @@ import { WebSessionStrips } from "./WebSessionStrips";
 import { WebSessionDialogs } from "./WebSessionDialogs";
 import { WebSplitPane } from "./WebSplitPane";
 import { useSplitSession } from "./webSplitView";
-import { hasNewerBuild, recordLoadedBuildId } from "./webBuildUpdate";
 
 /** 搜索命中落在未加载历史里时，最多向前补拉多少页（每页一个历史窗口，约 9 轮）。 */
 const MAX_SEARCH_JUMP_PAGES = 5;
@@ -61,7 +61,9 @@ import { WebSettingsDialog } from "./WebSettingsPanel";
 import { useWebCommands } from "./webCommandList";
 import { WebCommandPalette } from "./WebCommandPalette";
 import { applyFontSizeAttributes } from "../hooks/appearance/fontSizeAttributes";
-import { registerWebServiceWorker, usePwaInstall } from "./webPwa";
+import { useWebAppUpdate } from "./useWebAppUpdate";
+import { WebNoticeCenter } from "./WebNoticeCenter";
+import { useWebImageGen } from "./useWebImageGen";
 import { decideStreamRecovery } from "./webStreamRecovery";
 import { useWebHeaderAutoHide } from "./useWebHeaderAutoHide";
 import { resolveComposerHidden } from "./composerCollapse";
@@ -135,14 +137,11 @@ export function WebChatApp() {
 	// S6.3：DSH 工具面板（goals/subagents/skills）开关
 	const [dshToolsOpen, setDshToolsOpen] = useState(false);
 	// P1：workspace 抽屉 / 重命名 / 删除确认
-	const [workspaceOpen, setWorkspaceOpen] = useState(false);
-	// 抽屉面板与命令面板入口：状态由组合根持有（命令面板要能「打开 Git 面板」）。
-	const [workspacePanel, selectWorkspacePanel] = useWorkspacePanel();
+	const workspace = useWebWorkspaceController();
 	// 命令面板（Ctrl/Cmd+Shift+P）
 	const [commandOpen, setCommandOpen] = useState(false);
-	// 前端 bundle 自更新：基线 = 本页加载时的构建指纹；指纹一变只亮「更新」按钮，不一自动重载。
-	const loadedBuildIdRef = useRef<string | null>(null);
-	const [buildUpdateAvailable, setBuildUpdateAvailable] = useState(false);
+	const [noticeOpen, setNoticeOpen] = useState(false);
+
 	const [renameDraft, setRenameDraft] = useState<{ sessionId: string; title: string } | null>(null);
 	const [renameValue, setRenameValue] = useState("");
 	const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -219,13 +218,8 @@ export function WebChatApp() {
 	// runtime 忙态镜像：刷新页面/端口中断后 useChat 已回 ready 而 pi 仍在跑，
 	// 恢复判定用它区分「真正空闲」与「脱节待追赶」（render 期赋值，在 activeRuntime 计算之后）。
 	const activeRuntimeRef = useRef<WebRuntime | undefined>(undefined);
-	const { canInstall, install } = usePwaInstall();
+	const appUpdate = useWebAppUpdate();
 	const { resolvedTheme, themePreference, cycleTheme, toggleTheme } = webSettings;
-
-	// PWA：SW 注册一次（失败静默降级，不影响页面功能）
-	useEffect(() => {
-		registerWebServiceWorker();
-	}, []);
 
 	// ── 会话路由（URL ↔ activeSessionId）与标签同步 ──
 	// 刷新/分享/回退能回到同一会话；副作用收在 useWebSessionNavigation，组合根只持有 ref 与状态。
@@ -382,6 +376,7 @@ export function WebChatApp() {
 
 	const runtimeFor = (sessionId: string) => state.runtimes.find((runtime) => runtime.sessionId === sessionId);
 	const activeSession = state.sessions.find((session) => session.id === activeSessionId);
+	const invokeModel = activeSession?.model?.provider && activeSession.model.modelId ? { provider: activeSession.model.provider, modelId: activeSession.model.modelId } : null;
 	const activeRuntime = activeSessionId ? runtimeFor(activeSessionId) : undefined;
 	// 只认当前会话的加载阶段：切走后旧会话的 loading/error 不能挂到新会话的时间线上。
 	const activeHistoryPhase = activeSessionId && historyPhase?.sessionId === activeSessionId ? historyPhase.phase : null;
@@ -418,7 +413,7 @@ export function WebChatApp() {
 		setFilePreview({ kind: "file", projectId: project.id, projectRoot: project.root, path, line });
 	}, []);
 
-	const overlayOpen = mobileSidebarOpen || searchOpen || assetsOpen || dshToolsOpen || workspaceOpen || settingsOpen || commandOpen || filePreview != null || renameDraft != null || deleteConfirmId != null;
+	const overlayOpen = mobileSidebarOpen || searchOpen || assetsOpen || dshToolsOpen || workspace.open || settingsOpen || commandOpen || noticeOpen || filePreview != null || renameDraft != null || deleteConfirmId != null;
 	useEffect(() => {
 		overlayOpenRef.current = overlayOpen;
 		if (overlayOpen) revealHeader();
@@ -584,9 +579,7 @@ export function WebChatApp() {
 				// null = 304 未变化：直接结束（连指纹比较都省了，state 引用保持不变）
 				if (disposed || next === null) return;
 				setConnected(true);
-				// 基线与当前指纹对齐：首次落地即记录本页版本，之后的变化才算「有新版本」。
-				loadedBuildIdRef.current = recordLoadedBuildId(loadedBuildIdRef.current, next.buildId);
-				setBuildUpdateAvailable(hasNewerBuild(loadedBuildIdRef.current, next.buildId));
+				appUpdate.syncBuildId(next.buildId);
 				const fingerprint = fingerprintOf(next);
 				const unchanged = fingerprint === lastStateFingerprintRef.current;
 				lastStateFingerprintRef.current = fingerprint;
@@ -670,8 +663,12 @@ export function WebChatApp() {
 	// 图片必须以 file parts 随 user 消息提交：服务端 /api/chat 只从消息 parts 提取图片
 	// （extractChatImages），旧的自定义 body.images 字段服务端不读——图片从未真正送达 pi，
 	// 乐观气泡也不渲染缩略图（uiMessageImages 只认 file parts）。两处一并修正。
+	const imageGen = useWebImageGen({ sessionId: activeSessionId || null, enabled: activeSession?.backend === "imagegen", onError: setCommandError, onGenerated: (id) => void refreshSessionMessages(id) });
+
 	const handleSend = (text: string, images: string[], agentMessage?: string) => {
 		if (!text.trim() && images.length === 0) return;
+		// 生图会话不进 useChat：单次请求 + 落盘结果，成功后再刷新历史。
+		if (imageGen.maybeGenerate(text, images)) return;
 		// 用户主动发新消息 = 恢复自动投递（覆盖「停止后暂停」）
 		queuePausedRef.current = false;
 		if (!activeSessionId) {
@@ -1416,23 +1413,20 @@ export function WebChatApp() {
 		activeProjectId: activeSession?.projectId ?? state.projects[0]?.id,
 		hasActiveSession: Boolean(activeSession),
 		sessions: state.sessions,
-		canInstall,
+		canInstall: appUpdate.canInstall,
 		canSplit: openTabIds.length >= 2,
 		splitActive: splitSession !== null,
 		onToggleSplit: toggleSplit,
 		onNewSession: (projectId) => void handleCreateSession(projectId),
 		onCloseTab: handleCloseTab,
 		onSelectSession: setActiveSessionId,
-		onOpenPanel: (panel) => {
-			selectWorkspacePanel(panel);
-			setWorkspaceOpen(true);
-		},
-		onCloseWorkspace: () => setWorkspaceOpen(false),
+		onOpenPanel: workspace.openPanel,
+		onCloseWorkspace: workspace.close,
 		onOpenSettings: () => setSettingsOpen(true),
 		onToggleTheme: toggleTheme,
 		onOpenSearch: () => setSearchOpen(true),
 		onRefreshModels: () => void refreshModels(),
-		onInstall: () => void install(),
+		onInstall: () => void appUpdate.install(),
 	});
 
 	return (
@@ -1452,7 +1446,7 @@ export function WebChatApp() {
 				onCreateSession={(projectId) => void handleCreateSession(projectId)}
 				onCreateProject={handleCreateProject}
 				onDeleteProject={handleDeleteProject}
-				updateAvailable={buildUpdateAvailable}
+				updateAvailable={appUpdate.updateAvailable}
 				// 只重载本页：SW 静态资源是 network-first，重载即拿到新 bundle；
 				// 不用 location.replace 清 route，保留当前会话地址。
 				onApplyUpdate={() => window.location.reload()}
@@ -1479,7 +1473,7 @@ export function WebChatApp() {
 					onSecurityLevelChange={activeSession && activeSession.backend !== "dsh" && activeSession.backend !== "acp" ? (levelId) => void handleSecurityLevelChange(levelId) : undefined}
 					actions={{
 						onPermissionChange: activeSession?.backend === "dsh" ? (preset) => void handlePermissionChange(preset) : undefined,
-						onOpenWorkspace: activeSession ? () => setWorkspaceOpen(true) : undefined,
+						onOpenWorkspace: activeSession ? () => workspace.openPanel(workspace.panel) : undefined,
 						onRename: activeSessionId ? () => void runSessionAction("rename", activeSessionId) : undefined,
 						onDuplicate: activeSessionId ? () => void runSessionAction("duplicate", activeSessionId) : undefined,
 						onExportHtml: activeSessionId ? () => void runSessionAction("export", activeSessionId) : undefined,
@@ -1496,9 +1490,10 @@ export function WebChatApp() {
 					resolvedTheme={resolvedTheme}
 					onCycleTheme={cycleTheme}
 					onToggleTheme={toggleTheme}
-					canInstall={canInstall}
-					onInstall={() => void install()}
+					canInstall={appUpdate.canInstall}
+					onInstall={() => void appUpdate.install()}
 					onOpenAssets={() => setAssetsOpen(true)}
+					onOpenNotices={() => setNoticeOpen(true)}
 					onOpenSettings={() => setSettingsOpen(true)}
 					onOpenCommands={() => setCommandOpen(true)}
 					splitActive={splitSession !== null}
@@ -1614,18 +1609,21 @@ export function WebChatApp() {
 				/>
 			) : null}
 			{/* 桌面工作区与会话并排，移动端仍是覆盖式抽屉。 */}
-			{workspaceOpen && activeSession ? (
+			{workspace.open && activeSession ? (
 				<WebWorkspaceDrawer
 					projectId={activeSession.projectId}
-					open={workspaceOpen}
-					onClose={() => setWorkspaceOpen(false)}
+					open={workspace.open}
+					onClose={workspace.close}
 					onOpenFile={openFilePreview}
-					panel={workspacePanel}
-					onSelectPanel={selectWorkspacePanel}
+					panel={workspace.panel}
+					onSelectPanel={workspace.selectPanel}
 					terminalEnabled={webSettings.settings?.terminalEnabled === true}
 					sessionId={activeSessionId || null}
 					runtime={activeRuntime}
 					backend={activeSession?.backend}
+					invokeModel={invokeModel}
+					hasSession={(sessionId) => state.sessions.some((session) => session.id === sessionId)}
+					onOpenSession={setActiveSessionId}
 				/>
 			) : null}
 			{/* S6.3：DSH 工具面板（仅 dsh 会话头部按钮触发） */}
@@ -1633,6 +1631,7 @@ export function WebChatApp() {
 			<WebSearchDialog open={searchOpen} onOpenChange={setSearchOpen} sessionId={activeSessionId} messages={messages} onJump={jumpToSearchHit} />
 			<WebSkillsExtensionsDialog open={assetsOpen} onOpenChange={setAssetsOpen} />
 			<WebCommandPalette open={commandOpen} onOpenChange={setCommandOpen} commands={commands} />
+			<WebNoticeCenter open={noticeOpen} onOpenChange={setNoticeOpen} projectId={activeSession?.projectId} appVersion={state.version} onOpenSession={setActiveSessionId} onPrefill={(text) => setPrefill({ text, nonce: Date.now() })} />
 			<WebSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} controller={webSettings} />
 			{dshToolsOpen && activeSessionId && <WebDshToolsPanel sessionId={activeSessionId} onClose={() => setDshToolsOpen(false)} />}
 			{/* 第三批：文件/diff 全屏预览（消息文件链接 + 文件变更 strip chip） */}

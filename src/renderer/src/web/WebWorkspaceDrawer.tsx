@@ -5,8 +5,8 @@
  * 面板实现各自拆分（WebFilesPanel / WebGitPanel / WebNotesPanel），本文件只负责
  * 外壳、面板切换与关闭语义，避免再长成第二个 600 行巨文件。
  */
-import { useCallback, useEffect, useState } from "react";
-import { Activity, CalendarClock, FolderOpen, GitBranch, Pencil, SquareTerminal, X } from "lucide-react";
+import { useEffect } from "react";
+import { Activity, Bot, CalendarClock, FolderOpen, GitBranch, Pencil, SquareTerminal, Star, X } from "lucide-react";
 import { Button } from "@/components/ui-shadcn/button";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -20,17 +20,19 @@ import type { AgentBackend } from "../../../shared/types";
 import type { WebRuntime } from "./webTypes";
 import { WebStatusPanel } from "./WebStatusPanel";
 import { WebAutomationPanel } from "./WebAutomationPanel";
+import { WebAgentPanel } from "./WebAgentPanel";
+import { WebFavoritesPanel } from "./WebFavoritesPanel";
 
-export type WebWorkspacePanel = "files" | "git" | "notes" | "terminal" | "status" | "automation";
+export type WebWorkspacePanel = "files" | "git" | "notes" | "terminal" | "status" | "automation" | "agents" | "favorites";
 
 const PANEL_STORAGE_KEY = "pideck-web-workspace-panel";
-const PANEL_ORDER: WebWorkspacePanel[] = ["files", "git", "notes", "terminal", "status", "automation"];
+const PANEL_ORDER: WebWorkspacePanel[] = ["files", "git", "notes", "terminal", "status", "automation", "agents", "favorites"];
 
 /** 读取上次使用的面板（组合根与抽屉共用；命令面板「打开 Git 面板」也走同一存储）。 */
 export function readStoredWorkspacePanel(): WebWorkspacePanel {
 	if (typeof window === "undefined") return "files";
 	const stored = window.localStorage.getItem(PANEL_STORAGE_KEY);
-	return stored === "files" || stored === "git" || stored === "notes" || stored === "terminal" || stored === "status" || stored === "automation" ? stored : "files";
+	return stored === "files" || stored === "git" || stored === "notes" || stored === "terminal" || stored === "status" || stored === "automation" || stored === "agents" || stored === "favorites" ? stored : "files";
 }
 
 /** 记住当前面板：刷新/重开后停在同一页。 */
@@ -49,6 +51,8 @@ function panelLabel(panel: WebWorkspacePanel): string {
 	if (panel === "terminal") return t("web.panelTerminal");
 	if (panel === "status") return t("web.panelStatus");
 	if (panel === "automation") return t("web.panelAutomation");
+	if (panel === "agents") return t("web.panelAgents");
+	if (panel === "favorites") return t("favorites.title");
 	return t("web.panelFiles");
 }
 
@@ -58,10 +62,26 @@ function panelIcon(panel: WebWorkspacePanel) {
 	if (panel === "terminal") return SquareTerminal;
 	if (panel === "status") return Activity;
 	if (panel === "automation") return CalendarClock;
+	if (panel === "agents") return Bot;
+	if (panel === "favorites") return Star;
 	return FolderOpen;
 }
 
-export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; onClose: () => void; onOpenFile: (path: string) => void; panel: WebWorkspacePanel; onSelectPanel: (panel: WebWorkspacePanel) => void; terminalEnabled: boolean; sessionId: string | null; runtime?: WebRuntime; backend?: AgentBackend }) {
+export function WebWorkspaceDrawer(props: {
+	projectId: string;
+	open: boolean;
+	onClose: () => void;
+	onOpenFile: (path: string) => void;
+	panel: WebWorkspacePanel;
+	onSelectPanel: (panel: WebWorkspacePanel) => void;
+	terminalEnabled: boolean;
+	sessionId: string | null;
+	runtime?: WebRuntime;
+	backend?: AgentBackend;
+	invokeModel?: { provider: string; modelId: string } | null;
+	hasSession: (sessionId: string) => boolean;
+	onOpenSession: (sessionId: string) => void;
+}) {
 	const mobile = useIsMobileViewport();
 	// 终端入口只在桌面端打开开关后出现（C1：浏览器不能给自己开终端）。
 	const panelOrder = props.terminalEnabled ? PANEL_ORDER : PANEL_ORDER.filter((entry) => entry !== "terminal");
@@ -130,7 +150,7 @@ export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; on
 	);
 
 	const body =
-		panel === "terminal" || panel === "status" || panel === "automation" ? null : panel === "git" ? (
+		panel === "terminal" || panel === "status" || panel === "automation" || panel === "agents" || panel === "favorites" ? null : panel === "git" ? (
 			/* scroll-ok: nested —— Git 面板内部是变更列表 + diff 滚动，本层只做面板级滚动窗。 */
 			<div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
 				<WebGitPanel projectId={props.projectId} active={props.open} />
@@ -161,6 +181,12 @@ export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; on
 			<div className={cn("min-h-0 flex-1 overflow-y-auto px-2.5 py-2", panel !== "automation" && "hidden")}>
 				<WebAutomationPanel projectId={props.projectId} active={panel === "automation" && props.open} />
 			</div>
+			<div className={cn("min-h-0 flex-1 overflow-y-auto px-2.5 py-2", panel !== "agents" && "hidden")}>
+				<WebAgentPanel sessionId={props.sessionId} model={props.invokeModel ?? null} active={panel === "agents" && props.open} />
+			</div>
+			<div className={cn("min-h-0 flex-1 overflow-y-auto px-2.5 py-2", panel !== "favorites" && "hidden")}>
+				<WebFavoritesPanel sessionId={props.sessionId} hasSession={props.hasSession} onOpenSession={props.onOpenSession} active={panel === "favorites" && props.open} />
+			</div>
 		</>
 	);
 
@@ -178,17 +204,4 @@ export function WebWorkspaceDrawer(props: { projectId: string; open: boolean; on
 			</aside>
 		</div>
 	);
-}
-
-/**
- * 抽屉面板状态（组合根持有）：命令面板「打开 Git 面板」与活动栏点击写同一处，
- * 面板选择再持久化到 localStorage，刷新/重开停在同一页。
- */
-export function useWorkspacePanel(): [WebWorkspacePanel, (panel: WebWorkspacePanel) => void] {
-	const [panel, setPanel] = useState<WebWorkspacePanel>(() => readStoredWorkspacePanel());
-	const select = useCallback((next: WebWorkspacePanel) => {
-		setPanel(next);
-		storeWorkspacePanel(next);
-	}, []);
-	return [panel, select];
 }

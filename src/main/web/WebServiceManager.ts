@@ -44,6 +44,7 @@ import { WebStaticAssets } from "./WebStaticAssets";
 import { WebApiRoutes } from "./WebApiRoutes";
 import { WebStateEventHub } from "./WebStateEventHub";
 import { toPublicSessions } from "./WebSessionProjection";
+import { visibleWebProjects, visibleWebSessions } from "./WebProjectProjection";
 import { toWebSecurityState } from "./WebSecurityProjection";
 import { openSessionStream, writeSessionStreamError } from "./WebSessionStream";
 import { WebTokenAuth, type WebTokenPolicy } from "./WebTokenAuth";
@@ -245,6 +246,14 @@ export class WebServiceManager {
 	terminalRoutes: WebTerminalRoutes | null = null;
 	/** 自动化路由（T8）；未装配时 /api/automations 走 404。 */
 	automationRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 智能体路由（T9）；未装配时 /api/agents 走 404。 */
+	agentRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 收藏路由（T10）；未装配时 /api/favorites 走 404。 */
+	favoriteRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 通知/公告路由（T13）；未装配时 /api/notices、/api/announcements 走 404。 */
+	noticeRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 生图路由（T11）；未装配时 /api/imagegen/* 走 404。 */
+	imageGenRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
@@ -530,6 +539,10 @@ export class WebServiceManager {
 			// 设置（白名单投影/写入）与工作区路由（git/files/prompts）：独立模块承载，返回 false 表示未命中
 			if (this.settingsRoutes && (await this.settingsRoutes.handle(url, request, response))) return;
 			if (this.automationRoutes && (await this.automationRoutes.handle(url, request, response))) return;
+			if (this.agentRoutes && (await this.agentRoutes.handle(url, request, response))) return;
+			if (this.favoriteRoutes && (await this.favoriteRoutes.handle(url, request, response))) return;
+			if (this.noticeRoutes && (await this.noticeRoutes.handle(url, request, response))) return;
+			if (this.imageGenRoutes && (await this.imageGenRoutes.handle(url, request, response))) return;
 			if (this.workspaceRoutes && (await this.workspaceRoutes.handle(url, request, response))) return;
 			this.sendError(response, 404, "webError.apiNotFound", "API not found");
 			return;
@@ -617,14 +630,16 @@ export class WebServiceManager {
 		// messagesBySession 已移除（P0：轮询全量消息是纯浪费，React A2 从不消费；
 		// LAN Web 全量 UI 改为按 runtime 拉 GET /api/sessions/:id/messages，A1 兜底页
 		// 切会话/流结束时拉 /messages/page）。
+		// T12 v1：远程（SSH）项目没有本机路径，投影给 Web 只会得到必然失败的入口，因此不投影。
+		const projects = visibleWebProjects(this.deps.listProjects());
 		const sessions = await this.deps.listCatalogSessions();
 		const runtimes = this.deps.listSessionRuntimes();
 		const buildId = this.staticAssets.buildId();
 		return {
-			projects: this.deps.listProjects(),
+			projects,
 			// 会话按 Web 可见字段投影：filePath/environment/dshSessionId/agentPreset/preview/
 			// messageCount 等桌面端专用字段不下发（实测占快照 ~99% 中的三成，Web 端零消费）。
-			sessions: toPublicSessions(sessions),
+			sessions: toPublicSessions(visibleWebSessions(sessions, projects)),
 			runtimes,
 			pendingUiRequests: this.deps.listPendingUiRequests(),
 			// ACP 工具清单（id/name，已按 acpEnabled + enabled 门控）：Web 端后端选择器的 ACP 入口。

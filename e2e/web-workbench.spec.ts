@@ -338,6 +338,83 @@ test("web workbench: automation panel creates and deletes a manual task", async 
 	await expect(panel.getByTestId("web-automation-list")).not.toContainText("e2e-task", { timeout: 20_000 });
 });
 
+test("web workbench: agents can be edited, bound and deleted", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	await createSession(page);
+	const drawer = await openWorkspace(page);
+	await drawer.getByRole("tab", { name: "智能体" }).click();
+	const panel = page.getByTestId("web-agents-panel");
+	await panel.getByRole("button", { name: "新建智能体" }).click();
+	const dialog = page.getByRole("dialog");
+	await dialog.getByRole("textbox", { name: "名称", exact: true }).fill("e2e-agent");
+	await dialog.getByRole("textbox", { name: "角色设定" }).fill("You are a test helper");
+	await dialog.getByRole("button", { name: "保存" }).click();
+	await expect(panel).toContainText("e2e-agent", { timeout: 20_000 });
+	const agentRow = panel.locator("li").filter({ hasText: "e2e-agent" });
+	await agentRow.getByRole("button", { name: "绑定当前会话" }).click();
+	await expect(panel.getByText("已绑定", { exact: true })).toBeVisible({ timeout: 20_000 });
+	await agentRow.getByRole("button", { name: "删除", exact: true }).click();
+	await page.getByRole("alertdialog").getByRole("button", { name: "删除", exact: true }).click();
+	await expect(panel).not.toContainText("e2e-agent", { timeout: 20_000 });
+});
+
+test("web workbench: favorites can save, search and revisit a session", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	const sessionId = await createSession(page);
+	const drawer = await openWorkspace(page);
+	await drawer.getByRole("tab", { name: "收藏" }).click();
+	const panel = page.getByTestId("web-favorites-panel");
+	await panel.getByRole("button", { name: "收藏会话" }).click();
+	await expect(panel.locator("li")).toHaveCount(1, { timeout: 20_000 });
+	await panel.getByRole("textbox").fill("no-matching-favorite");
+	await expect(panel.locator("li")).toHaveCount(0);
+	await panel.getByRole("textbox").fill("");
+	await panel.getByRole("button", { name: "打开会话" }).click();
+	await expect.poll(() => page.url()).toContain(`/s/${sessionId}`);
+});
+
+/**
+ * T13 通知中心：公告 / 通知历史 / 反馈三区可达；反馈走既有建会话链路并把说明预填进输入框。
+ */
+test("web workbench: notice center shows announcements and creates a feedback session", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	await createSession(page);
+
+	await page.locator(".web-header-actions button").last().click();
+	await page.getByRole("menuitem", { name: "通知中心" }).click();
+	const center = page.getByTestId("web-notice-center");
+	await expect(center).toBeVisible();
+	await expect(center.getByRole("tab", { name: "公告" })).toBeVisible();
+	await expect(center.getByRole("tab", { name: "通知" })).toBeVisible();
+
+	await center.getByRole("tab", { name: "反馈" }).click();
+	const note = center.getByRole("textbox", { name: "描述遇到的问题或建议" });
+	await note.fill("web feedback e2e");
+	await center.getByRole("button", { name: "新建反馈会话" }).click();
+	await expect(center).toBeHidden({ timeout: 20_000 });
+	await expect(page.locator("textarea#prompt")).toHaveValue(/web feedback e2e/);
+});
+
+/**
+ * T15 离线可读性：设备断网显示「设备离线」（而非一直是「连接中」），恢复后回到「已连接」。
+ * 浏览器离线 ≠ 服务端不可达——两者文案必须能区分，否则用户会去重启服务而不是等网络。
+ */
+test("web workbench: offline state is distinguishable from connecting", async ({ app }) => {
+	test.setTimeout(150_000);
+	const page = await openPage(app);
+	const footer = page.locator(".sidebar-bottom-actions");
+	await expect(footer).toContainText("已连接", { timeout: 20_000 });
+
+	await page.context().setOffline(true);
+	await expect(footer).toContainText("设备离线", { timeout: 15_000 });
+
+	await page.context().setOffline(false);
+	await expect(footer).toContainText("已连接", { timeout: 30_000 });
+});
+
 /**
  * 移动端（390px）工作区：文件面板与 Git 面板都不能产生横向溢出。
  * 设置面板的 390px 用例在 web-settings.spec.ts；这里补抽屉/分支下拉这两块最容易撑破宽度的区域。

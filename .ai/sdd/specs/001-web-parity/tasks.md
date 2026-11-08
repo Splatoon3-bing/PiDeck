@@ -90,13 +90,13 @@
 | T6 | 终端（默认关闭） | P0 | 8h | 安全评审 | pending |
 | T7 | 分屏/状态面板 | P2 | 6h | T0.1 | done（T7a 状态面板 + T7b 只读 peek 分屏） |
 | T8 | 自动化页 | P2 | 6h | 路由基建 | done（S1 数据面 + S2 UI + S3 E2E） |
-| T9 | 智能体页 | P2 | 4h | 路由基建 | pending |
-| T10 | 收藏页 | P2 | 3h | 路由基建 | pending |
-| T11 | 生图/生视频 | P3 | 6h | 后端链路 | pending |
-| T12 | 远程/WSL/Worktree | P3 | 10h | 安全评审 | pending |
-| T13 | 通知/公告/反馈 | P2 | 4h | 路由基建 | pending |
-| T14 | 宿主插件（只读） | P3 | 3h | 安全评审 | pending |
-| T15 | PWA/离线 | P2 | 3h | T5 | pending |
+| T9 | 智能体页 | P2 | 4h | 路由基建 | done |
+| T10 | 收藏页 | P2 | 3h | 路由基建 | done |
+| T11 | 生图/生视频 | P3 | 6h | 后端链路 | done（v1 生图；生视频后置，见切片 §5） |
+| T12 | 远程/WSL/Worktree | P3 | 10h | 安全评审 | done（v1：远程不投影；locator 通道后置） |
+| T13 | 通知/公告/反馈 | P2 | 4h | 路由基建 | done |
+| T14 | 宿主插件（只读） | P3 | 3h | 安全评审 | 评审完成；实现后置（见评审 §3） |
+| T15 | PWA/离线 | P2 | 3h | T5 | done（离线可读性；SW 策略沿用既有） |
 
 ## Dependency Diagram
 
@@ -361,6 +361,48 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - T15 PWA/离线：SW 缓存策略、离线壳、重连。
 
 ## Progress Log
+
+### 2026-11-07 — T12 安全评审 + v1 投影收口；T14 评审
+
+- T12 评审发现真实暴露：`/api/state` 把 SSH 远程项目也下发给 Web，而文件/Git/终端只认本机 `path` → 必然点不动、错误语义混乱。v1 决定：远程项目不进 Web 投影（`WebProjectProjection`），会话跟随项目可见性过滤；WSL/worktree 沿用既有 realpath 边界，不新增特权。locator 级通道与远端写操作留待 T12 full（前置条件写在评审 §4）。
+- T14 评审结论：不开放宿主插件路由（安装/授权/执行/私有 storage 均为高风险，只读清单价值低）；最小安全切片与拒绝用例清单记入评审 §3，避免后续误判「漏做」。
+- 验证：`tests/webProjectProjection.test.mjs` 2 条全绿；`npm run typecheck` 0 错。
+
+### 2026-11-07 — T11 生图（v1）
+
+- 切片：`t11-imagegen-web-slice.md`（生视频明确后置：长任务 + 事件流需独立评审）。
+- 路由：`WebImageGenRoutes` — `GET /api/imagegen/config`（只投影 id/name/models/referenceMode）、`POST /api/imagegen/generate`、`GET /api/imagegen/blob/<ref>`（nosniff + CSP sandbox + 内容寻址缓存）。
+- 安全：凭据/`baseUrl`/`extraParams` 不出主进程；会话必须 `backend=imagegen`（fail-closed，不污染 pi/DSH 历史）；provider/model 必须在服务端配置内；prompt/参考图有界；供应商错误码只回稳定 code，不回 upstream detail。
+- 持久化：`ImageSessionStore` 追加 user+assistant 两条，图片只存 `ref`（base64 不进 JSONL），并 `promoteToActive`；持久化失败只记日志（已生成结果不因历史写失败而报错，避免二次计费）。
+- 渲染层：`useWebImageGen`（生图会话发送走生成接口，其它后端零影响）、历史图片 `ref → /api/imagegen/blob/<ref>?token=`（`<img>` 不能带 header）。
+- 验证：`webImageGenRoutes` **7 条**全绿（凭据零外泄、非生图会话 400、未知 provider/model、prompt/参考图边界、未配置 409、blob 头与 404）；相关 web 单测合计 **20 条**；`web-workbench` **13 passed / 1 skipped**；typecheck 0 错；check:format 与 `electron-vite build` 通过。
+- 巨文件：`WebChatApp.tsx` **1651**、`main/index.ts` **8021**（均不高于任务起点 1652 / 8021）。
+- 未做（诚实记录）：生图 E2E 未加——真实生成需要供应商凭据，CI 无凭据时只能测到 409 分支；安全边界由 7 条路由测试覆盖，UI 侧仅共享既有 composer 链路。
+
+### 2026-11-07 — T15 PWA/离线（连接相位可读性）
+
+- SW 策略复核：`src/renderer/public/sw.js` 已是 network-first + 离线壳回退，且排除 `/api/*` 与 SSE，无需改动（不缓存鉴权响应是硬边界）。
+- 新增 `webConnectivity.ts`：`resolveConnectionPhase(serverReachable, browserOnline)` 三态（online / connecting / offline）+ `useBrowserOnline`；侧栏底栏据此区分「设备离线」与「连接中」，不再把断网误报成服务异常。
+- 更新确认沿用既有构建指纹按钮（`useWebAppUpdate`，本轮从组合根抽出）；离线时不误报更新。
+- 验证：`webConnectivity` 2 条单测；`web-workbench` E2E 新增断网/恢复用例 → **13 passed / 1 skipped**；typecheck 0 错；check:format 通过；`npx electron-vite build` 通过。
+- 巨文件：`WebChatApp.tsx` **1646**、`main/index.ts` **8017**（均低于本任务起点 1652 / 8021）。
+
+### 2026-11-07 — T10 收藏 + T13 通知/公告/反馈
+
+- T10：`WebFavoritesRoutes`（GET 列表 / add-session / delete）；添加会话只收 sessionId，标题与项目由主进程 catalog 填入，浏览器不能伪造正文与来源。抽屉新增收藏面板（搜索/复制/跳回/删除确认）。
+- T13：`WebNoticeRoutes`（GET `/api/notices`、POST clear；GET `/api/announcements`、mark-read、mark-all-read）；公告投影不下发 `notifiedIds`（本机 toast 簿记）。`WebNoticeCenter`（⋮ 菜单入口）：公告/通知/反馈三区，反馈复用既有建会话链路 + composer 预填，不新增写通道。
+- 修复装配根因：`sessionCatalog` 是启动后段赋值的模块级 `let`，此前按值传进 `webDomainProviders` → 运行期 `catalog.get` 报 `reading 'get'`，同时打挂智能体绑定与收藏添加。改为 getter（provider）并在 `webStoreProviders` 统一收口。
+- 巨文件：`WebChatApp.tsx` 1652 → **1646**、`main/index.ts` 8021 → **8017**（净减）。手法：抽屉开关/面板选择抽 `useWebWorkspaceController`，PWA/构建指纹抽 `useWebAppUpdate`，通知历史装配细节收回领域工厂 `createNoticeHistoryStore`。
+- 验证：typecheck 0 错；`webAgentRoutes`/`webFavoritesRoutes`/`webNoticeRoutes`/`webAutomationRoutes`/`webSessionRoute` **28 条全绿**；`web-workbench` **12 passed / 1 skipped**（新增智能体、收藏、通知中心三条用例）；check:format 通过；`npx electron-vite build` 通过。
+
+### 2026-11-07 — T9 智能体
+
+- 接口/安全切片：`t9-agents-web-slice.md`；`WebAgentRoutes` 复用 `AgentProfileStore` / `AgentInvokeService`，CRUD/绑定均白名单，会话归属经 catalog 校验。
+- 一次性调用仍走例外四 sidecar；拒收 `systemPrompt`，runId 隔离 SSE、取消只认活跃 Web run、终态缓存 5 分钟回收，日志不记输入/输出/角色设定。
+- 工作区抽屉新增智能体面板（搜索/新建编辑/绑定/删除/试跑）；试跑使用当前会话模型，E2E 不调用真实模型。
+- 验证：typecheck 0 错；针对性单测 58 条全绿；`web-workbench` 10 passed / 1 skipped；check:format 通过；相关 Vite build 通过。
+- 巨文件：`WebChatApp.tsx` 1656（基线 1652，需后续面板注册迁移净减）；`main/index.ts` 8022（需装配收敛净减）。
+
 
 ### 2026-11-07 — T8 自动化（数据面 + UI + E2E）
 

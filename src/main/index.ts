@@ -536,7 +536,7 @@ import { registerBackupIpc } from "./ipc/backupIpc";
 import { registerCatalogIpc } from "./ipc/catalogIpc";
 import { registerQuickMessagesIpc } from "./ipc/quickMessagesIpc";
 import { registerNoticeHistoryIpc } from "./ipc/noticeHistoryIpc";
-import { NoticeHistoryStore } from "./notices/NoticeHistoryStore";
+import { createNoticeHistoryStore, NoticeHistoryStore } from "./notices/NoticeHistoryStore";
 import { registerReplyActionsIpc } from "./ipc/replyActionsIpc";
 import { QuickMessageStore } from "./quickmessages/QuickMessageStore";
 import { ReplyActionRuleStore } from "./replyactions/ReplyActionRuleStore";
@@ -557,6 +557,8 @@ import { MiniOverlayWindow } from "./floating/MiniOverlayWindow";
 import { BROWSER_PANEL_PARTITION as BROWSER_PANEL_PARTITION_SHARED, isAllowedBrowserPanelUrl as isAllowedBrowserPanelUrlShared } from "./browser/browserSecurity";
 import { WebServiceManager } from "./web/WebServiceManager";
 import { registerWebRoutes } from "./web/registerWebRoutes";
+import { webDomainProviders } from "./web/webStoreProviders";
+import { createWebImageGenDeps, getWebImageGenDeps, installWebImageGenDeps } from "./web/WebImageGenRoutes";
 import { preparePreloadPath } from "./preloadPath";
 import { AppLogger } from "./logging/AppLogger";
 import { setAppLogger } from "./logging/sharedLogger";
@@ -812,6 +814,7 @@ let remoteHostServiceResolver: (() => Promise<RemoteHostConnectionService> | und
 let soundAlertService: SoundAlertService | null = null;
 /** 应用公告服务（无服务器拉取模式）；null = 未初始化 */
 let announcementService: AnnouncementService | null = null;
+let noticeHistoryStoreRef: NoticeHistoryStore | null = null;
 /** CUA（Computer Use Agent）服务；null = 未初始化 */
 let cuaService: CuaService | null = null;
 /** 浏览器 Agent 服务（内置 webview + CDP）；null = 未初始化 */
@@ -4102,14 +4105,8 @@ function registerIpc() {
 	registerScratchPadIpc({ appLogger, service: scratchPadService });
 
 	// 通知历史落盘：showNotice 单点记录后推送主进程，重启可回灌（渲染层环形缓冲只服务当次会话）
-	const noticeHistoryStore = new NoticeHistoryStore({
-		getFilePath: () => join(app.getPath("userData"), "notice-history.json"),
-		log: (level, message, detail) => {
-			if (level === "error") void appLogger.error("notice-history", message, detail);
-			else void appLogger.info("notice-history", message, detail);
-		},
-	});
-	registerNoticeHistoryIpc(noticeHistoryStore);
+	const noticeHistoryStore = createNoticeHistoryStore(() => app.getPath("userData"), appLogger);
+	registerNoticeHistoryIpc((noticeHistoryStoreRef = noticeHistoryStore));
 	// C12：退出前 flush 防抖窗口内的尾巴——store 写盘是防抖合并（500ms），不冲盘就退出
 	// 会丢最后几条通知历史；runAll 会 await 异步清理，写盘完成才放行退出。
 	quitCleanup.register("notice-history", async () => {
@@ -4244,15 +4241,16 @@ function registerIpc() {
 	// 保存/复制要在渲染层拿字节：fetch(pideck-file://) 在该 scheme 上会被拦（corsEnabled: false），
 	// 所以字节走 IPC，白名单与体积判定跟协议同一份实现。
 	registerLocalImageIpc({ resolveRoots: canonicalLocalImageRoots });
+	const imageGenService = new ImageGenService({
+		getProviderCredentials: async (provider) => {
+			const creds = await imageGenConfigStore.getCredentials(provider);
+			if (!creds) return null;
+			return { baseUrl: creds.baseUrl, apiKey: creds.apiKey, extraParams: creds.extraParams, referenceMode: creds.provider.referenceMode, apiStyle: creds.provider.apiStyle };
+		},
+		log: (message, ...args) => appLogger.info("imagegen", message, ...args),
+	});
 	registerImageGenIpc({
-		imageGen: new ImageGenService({
-			getProviderCredentials: async (provider) => {
-				const creds = await imageGenConfigStore.getCredentials(provider);
-				if (!creds) return null;
-				return { baseUrl: creds.baseUrl, apiKey: creds.apiKey, extraParams: creds.extraParams, referenceMode: creds.provider.referenceMode, apiStyle: creds.provider.apiStyle };
-			},
-			log: (message, ...args) => appLogger.info("imagegen", message, ...args),
-		}),
+		imageGen: imageGenService,
 		imageGenConfig: imageGenConfigStore,
 		log: (message, ...args) => appLogger.info("imagegen", message, ...args),
 		readImageBlob: (ref) => imageBlobStore.readPayload(ref),
@@ -4352,6 +4350,7 @@ function registerIpc() {
 			// 生图消息不走 Agent 消息流，refreshAutoTitle 不会触发，标题更新已在 filePath 判断前完成。
 		},
 	});
+	installWebImageGenDeps(createWebImageGenDeps({ config: imageGenConfigStore, service: imageGenService, blobs: imageBlobStore, sessions: imageSessionStore, catalog: () => sessionCatalog }));
 
 	/**
 	 * 远端会话根判定（远端读取与远端归档共用）：走**与扫描/登记同一份**实现。
@@ -6832,7 +6831,8 @@ app
 			extensions: extensionManager,
 			settings: settingsStore,
 			onThemeApplied: applyNativeThemeSource,
-			automation: { store: () => automationStore, runs: () => automationRunCoordinator },
+			...webDomainProviders({ automation: () => automationStore, runs: () => automationRunCoordinator, agents: () => agentProfileStore, invoke: () => agentInvokeService, favorites: () => favoritesStore, catalog: () => sessionCatalog, notices: () => noticeHistoryStoreRef, announcements: () => announcementService }),
+			imagegen: getWebImageGenDeps,
 			terminal: {
 				enabled: () => settingsStore.get().webTerminalEnabled === true,
 				requiresAuth: () => settingsStore.get().webServiceRequiresAuth ?? true,
