@@ -35,6 +35,8 @@ export function killProcessTree(childPid: number, platform: NodeJS.Platform = pr
 }
 
 export interface RunGitOptions {
+	/** 平台可注入：测试锁 win32 验 WSL 分支；生产默认真实平台（planGitSpawn 内部兜底）。 */
+	platform?: NodeJS.Platform;
 	cwd: string;
 	timeoutMs?: number;
 	maxBuffer?: number;
