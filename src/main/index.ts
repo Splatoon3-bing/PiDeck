@@ -214,9 +214,7 @@ if (process.platform === "win32") {
 // 安装包内 electron-builder 的 protocols 配置也会在安装时写入注册表，此处是运行时兜底。
 // dev 通道构建注册 pideck-dev://（安装清单同 scheme）：注册表按 scheme 为键，
 // 两通道同 scheme 会互相抢占关联，点击通知会唤起错误的通道。
-if (app.isPackaged) {
-	app.setAsDefaultProtocolClient(APP_DEEP_LINK_SCHEME);
-}
+if (app.isPackaged) app.setAsDefaultProtocolClient(APP_DEEP_LINK_SCHEME);
 
 // 按「应用版本」隔离的单实例：同版本复用窗口，不同版本可并行。
 // 双通道共用 userData（PiDeck）的前提下，锁文件仍按版本分文件：

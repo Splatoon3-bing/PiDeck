@@ -81,3 +81,37 @@ test("未装配或目录读取失败 → 503，不向浏览器抛出内部错误
 	assert.equal(failed.status, 503);
 	assert.equal(JSON.stringify(failed.body).includes("/home/user/secret"), false);
 });
+
+test("Web 服务先启动、宿主插件服务后装配：路由仍注册并在装配后生效（不给 404）", async () => {
+	// 启动顺序：registerWebDomainRoutes 早于 registerIpc() 里的 installWebHostPluginDeps。
+	// 路由若在注册时取 deps，/api/host-plugins 会永久 404（真机 Web 现场）。
+	const hostRoutes = loadTsCommonJs("src/main/web/WebHostPluginRoutes.ts");
+	const { registerWebDomainRoutes } = loadTsCommonJs("src/main/web/registerWebDomainRoutes.ts", {
+		stubs: {
+			"./WebAutomationRoutes": { WebAutomationRoutes: class {} },
+			"./WebAgentRoutes": { WebAgentRoutes: class {} },
+			"./WebFavoritesRoutes": { WebFavoritesRoutes: class {} },
+			"./WebNoticeRoutes": { WebNoticeRoutes: class {} },
+			"./WebImageGenRoutes": { WebImageGenRoutes: class {} },
+			"./WebHostPluginRoutes": hostRoutes,
+		},
+	});
+	const target = {};
+	registerWebDomainRoutes(target, {
+		projects: { get: () => undefined },
+		automation: { store: () => null, runs: () => null },
+		agents: { store: () => null, invoke: () => null, hasSession: () => false },
+		favorites: { store: () => null, getSession: () => null },
+		notices: { notices: () => null, announcements: () => null },
+		imagegen: () => null,
+	});
+	assert.ok(target.hostPluginRoutes, "宿主插件路由必须在 Web 服务启动时就注册");
+
+	// 装配前：能力存在但不可用 → 503（fail-closed），不是 404。
+	assert.equal((await call(target.hostPluginRoutes)).status, 503);
+
+	hostRoutes.installWebHostPluginDeps({ catalog: () => catalog });
+	const after = await call(target.hostPluginRoutes);
+	assert.equal(after.status, 200);
+	assert.equal(after.body.plugins.length, 1);
+});

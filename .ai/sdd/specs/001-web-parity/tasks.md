@@ -372,6 +372,7 @@ Web 端命令面板（Ctrl/Cmd+Shift+P）：会话切换、关闭标签、打开
 - **长尾（8）**：`securityPolicy` 的相对 allowDir 按基址形态选 win32.resolve；`localImageAccess.isInsideRoot` 按路径形态选 win32/posix relative（8.3 短名事故全在 Windows 形态）；`agentMemory/paths.canonicalPath` 对盘符/UNC 走 `win32.resolve`（`C:/p` 与 `C:\p` 同键）；`PiResourceTargetResolver` 的绝对路径判定按形态（POSIX 上 UNC 不是 `isAbsolute`）；`packageResourceResolver.readPackageVersion` 把起点是文件时的 `ENOTDIR` 当「继续向上」；`piDeckRuntimeRetryContract` 的机器语料断言改为「扩展判为瞬态必须改写 + 改写后双运行时都可重试」（原「至少救回一条」依赖本机历史）；`skillCatalog` 项目根夹具改按宿主平台构造；`webServiceHardening` 的令牌横幅文案断言跟到拆出的 `WebComposerBanner`。
 - **webLayout（5）**：已用基线 worktree 确认为既有失败，根因是重构后实现位置漂移（`manualOpen` 门控、删除会话 AlertDialog → `WebSessionDialogs`、主题求值 → `useWebSettings`、错误/待答横幅 → `WebComposerBanner`）。按用户确认「更新断言到新位置、保留同等强度」处理，未改产品行为。
 - **T14 渲染层入口**：技能/扩展弹窗新增「宿主插件」只读 tab（`listWebHostPlugins`：503 → null 只降级该 tab）；只展示 `name/version/id/description/enabled/requiresConsent/permissions`，无开关/安装/授权/执行；三语文案齐全（zh-TW 由 `genZhTwCopy` 生成）。
+- **T14 装配顺序修复（真机 Web 验证发现）**：`registerWebDomainRoutes` 早于 `registerIpc()` 里的 `installWebHostPluginDeps`，原实现「注册时取 deps」导致 `/api/host-plugins` 永久 404。改为**无条件注册 + 请求时取 catalog**（未装配 → 503 fail-closed）；新增回归用例锁定「Web 先启动、服务后装配」的顺序。dev 实例实测：`/api/host-plugins` 200、弹窗「宿主插件」tab 可见且无开关。
 - **门禁**：typecheck 0 错；check:format 0 错；`npx electron-vite build` 成功；`npx playwright test e2e/web-workbench.spec.ts` 13 passed / 1 skipped。巨文件未净增长（任务起点 931143a2c 基线 WebChatApp 1651 行、`main/index.ts` 8022 行，当前不变）。
 
 ### 2026-11-08 — 全量红单根因修复（TS loader）+ T14 只读实现

@@ -26,6 +26,8 @@ export function registerWebDomainRoutes(target: Pick<WebServiceManager, "automat
 	target.noticeRoutes = new WebNoticeRoutes({ notices: deps.notices.notices, announcements: deps.notices.announcements });
 	const imagegen = deps.imagegen();
 	if (imagegen) target.imageGenRoutes = new WebImageGenRoutes(imagegen);
-	const hostPlugins = getWebHostPluginDeps();
-	if (hostPlugins) target.hostPluginRoutes = new WebHostPluginRoutes(hostPlugins);
+	// 宿主插件服务在 registerIpc() 后段才装配，而本函数在更早的 Web 服务启动路径里执行：
+	// 路由必须**无条件注册**、catalog 在请求时再取，否则 /api/host-plugins 会因启动顺序永久 404。
+	// 未装配时 catalog() 返回 null → 503（fail-closed），不会回退到 404 或本机其它能力。
+	target.hostPluginRoutes = new WebHostPluginRoutes({ catalog: () => getWebHostPluginDeps()?.catalog() ?? null });
 }
