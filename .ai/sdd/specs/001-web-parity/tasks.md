@@ -87,7 +87,7 @@
 | T3 | Git 分支（列表/切换/新建/fetch） | P1 | 3h | T0.5 | done |
 | T4 | 命令面板 | P1 | 2h | T0.1 | done |
 | T5 | 移动端/安全/回归测试 | P1 | 2h | T1–T4 | done |
-| T6 | 终端（默认关闭） | P0 | 8h | 安全评审 | pending |
+| T6 | 终端（默认关闭） | P0 | 8h | 安全评审 | done（WebSocket + xterm.js + 默认关闭 + 3 条 E2E 全绿） |
 | T7 | 分屏/状态面板 | P2 | 6h | T0.1 | done（T7a 状态面板 + T7b 只读 peek 分屏） |
 | T8 | 自动化页 | P2 | 6h | 路由基建 | done（S1 数据面 + S2 UI + S3 E2E） |
 | T9 | 智能体页 | P2 | 4h | 路由基建 | done |
