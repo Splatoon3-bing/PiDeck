@@ -7,8 +7,23 @@
  * 扩展负责「按快照拦截」。
  */
 
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve, win32 } from "node:path";
 import type { SecurityAction, SecurityConfig, SecurityLevelConfig, SecurityPolicySnapshot } from "../../shared/types/security";
+
+/** 盘符/UNC 形态：node:path 的 isAbsolute/resolve 只看宿主平台，Windows 路径在 POSIX 上会被当相对路径。 */
+function isWindowsShaped(p: string): boolean {
+	return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
+}
+
+/** 盘符/UNC 形态的「绝对路径」判定：形状自证，不依赖宿主平台。 */
+function isAbsoluteForCompare(p: string): boolean {
+	return isAbsolute(p) || isWindowsShaped(p);
+}
+
+/** 以某个基址展开相对目录：基址是 Windows 形态时用 win32 语义拼接。 */
+function resolveDirAgainst(base: string, dir: string): string {
+	return isWindowsShaped(base) ? win32.resolve(base, dir) : resolve(base, dir);
+}
 
 /**
  * 敏感路径模式（本地副本，与 shared/types/security.ts 的 DEFAULT_SENSITIVE_PATH_PATTERNS
@@ -159,7 +174,7 @@ export type UserReadAccessVerdict = { access: SecurityAction; reason: UserReadAc
 export function evaluateUserReadAccess(config: SecurityConfig | null, input: { filePath: string; cwd?: string; projectRoot?: string; sessionId?: string }): UserReadAccessVerdict {
 	const dirBase = input.cwd ?? input.projectRoot;
 	// 配置里的相对目录按工作目录展开（与渲染层 resolveConfigDir 同语义）；没有基准目录时按原样比较
-	const resolveDir = (dir: string) => (isAbsolute(dir) || !dirBase ? dir : resolve(dirBase, dir));
+	const resolveDir = (dir: string) => (isAbsoluteForCompare(dir) || !dirBase ? dir : resolveDirAgainst(dirBase, dir));
 
 	// 配置拉取失败不猜：问用户（不静默放行绕过严格等级，也不静默拒绝回到老问题）
 	if (!config) return { access: "ask", reason: "policy-unavailable" };

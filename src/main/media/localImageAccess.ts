@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, posix, relative, win32 } from "node:path";
 import { isLocalImageExtension, LOCAL_IMAGE_MAX_BYTES } from "../../shared/localImage";
 
 /**
@@ -24,18 +24,27 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 /** UNC（`\\server\share`）：宿主侧协议服务不到远程共享，也不在根白名单语义内。 */
 const UNC_PATH = /^[\\/]{2}/;
 
+/** 盘符/UNC 形态：仅用宿主 node:path 的 relative 会把 Windows 反斜杠当成普通文件名字符。 */
+function isWindowsShapedPath(p: string): boolean {
+	return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
+}
+
 /**
  * 目标是否落在根目录内（含根本身）。
  *
  * 与 `isPathInsideProject` 同为「词法边界」判定，但这里刻意不复用 main/fs 的实现：
  * 那条 import 链会带进 logging/electron，纯判定模块一旦依赖它就失去可单测性。
+ * 路径语义按**形态**选：根/目标任一为 Windows 形态（盘符/UNC）就按 win32 比较，
+ * 否则按 posix。host platform 不能作判据：WSL 白名单根是 Linux 路径，而 8.3 短名
+ * 事故里的根/图片路径都来自 Windows。
  */
 export function isInsideRoot(root: string, target: string): boolean {
 	if (root === "" || target === "") return false;
-	const rel = relative(root, target);
+	const path = isWindowsShapedPath(root) || isWindowsShapedPath(target) ? win32 : posix;
+	const rel = path.relative(root, target);
 	if (rel === "") return true;
 	if (rel.startsWith("..")) return false;
-	return !isAbsolute(rel);
+	return !path.isAbsolute(rel);
 }
 
 /**
