@@ -99,7 +99,9 @@ export function buildLanes({ testConcurrency, e2e }) {
 				{
 					label: "node --test tests/**",
 					file: process.execPath,
-					args: ["--test", `--test-concurrency=${testConcurrency}`, "tests/*.test.mjs", "tests/cua/*.test.mjs"],
+					// 与 `npm test` 同一入口：必须带 tsEsmLoader，否则直接 import `src/**.ts` 的用例
+					// 整体加载失败（ERR_NO_TYPESCRIPT），preflight 会把它们误报成大批红单。
+					args: ["--import", "./tests/helpers/tsEsmLoader.mjs", "--test", `--test-concurrency=${testConcurrency}`, "tests/*.test.mjs", "tests/cua/*.test.mjs"],
 				},
 			],
 		},
