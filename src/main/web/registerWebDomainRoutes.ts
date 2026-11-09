@@ -24,8 +24,21 @@ export function registerWebDomainRoutes(target: Pick<WebServiceManager, "automat
 	target.agentRoutes = new WebAgentRoutes({ store: deps.agents.store, invoke: deps.agents.invoke, hasSession: deps.agents.hasSession });
 	target.favoriteRoutes = new WebFavoritesRoutes({ store: deps.favorites.store, getSession: deps.favorites.getSession });
 	target.noticeRoutes = new WebNoticeRoutes({ notices: deps.notices.notices, announcements: deps.notices.announcements });
-	const imagegen = deps.imagegen();
-	if (imagegen) target.imageGenRoutes = new WebImageGenRoutes(imagegen);
+	// 生图依赖由 installWebImageGenDeps() 在 registerIpc() 里装配，而本函数在启动序列里
+	// 更早执行（index.ts：registerWebRoutes ≈ 6821 行，registerIpc() ≈ 7552 行）——
+	// 直接取会在启动期拿到 null，imageGenRoutes 永远不注册，/api/imagegen/* 恒 404。
+	// 与 hostPluginRoutes 同一个坑：无条件注册懒解析代理，deps 在首次请求时再取。
+	let imagegenRoutes: WebImageGenRoutes | null = null;
+	target.imageGenRoutes = {
+		async handle(url, request, response) {
+			if (!imagegenRoutes) {
+				const imagegen = deps.imagegen();
+				if (!imagegen) return false;
+				imagegenRoutes = new WebImageGenRoutes(imagegen);
+			}
+			return imagegenRoutes.handle(url, request, response);
+		},
+	};
 	// 宿主插件服务在 registerIpc() 后段才装配，而本函数在更早的 Web 服务启动路径里执行：
 	// 路由必须**无条件注册**、catalog 在请求时再取，否则 /api/host-plugins 会因启动顺序永久 404。
 	// 未装配时 catalog() 返回 null → 503（fail-closed），不会回退到 404 或本机其它能力。
