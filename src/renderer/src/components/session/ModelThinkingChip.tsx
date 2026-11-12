@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui-shadcn/popover";
 import { Slider } from "../ui-shadcn/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui-shadcn/tooltip";
 import { clampThinkingLevelToAllowed } from "../../utils/thinkingDisplay";
-import { THINKING_LEVELS, type ThinkingPickerLevel } from "./sessionPickerOptions";
+import { THINKING_LEVELS, highestThinkingLevel, type ThinkingPickerLevel } from "./sessionPickerOptions";
 import { accumulateWheelStep, type WheelStepState } from "./thinkingWheelStep";
 
 /**
@@ -98,6 +98,9 @@ function ThinkingWheelZone(props: { disabled?: boolean; levels: ThinkingPickerLe
 export function ThinkingLevelDropdown(props: { current?: string; levels?: ThinkingPickerLevel[]; open: boolean; onOpenChange: (open: boolean) => void; disabled?: boolean; onPick: (level: string) => void }) {
 	// undefined 表示能力尚未知，沿用旧版全量回退；[] 则是后端明确表示不支持。
 	const levels = props.levels ?? THINKING_LEVELS;
+	// 后端明确只接受 off（含空数组）= 这个模型没有思考能力：底栏直接写「不支持思考」，
+	// 不摆一个只有一档的滑条让用户反复试（旧行为），也不把全量 7 档当兼容回退（那会宣称 max）。
+	const unsupported = props.levels !== undefined && highestThinkingLevel(levels.map((level) => level.value)) === "off";
 	const effectiveLevel = levels.some((level) => level.value === props.current) ? props.current : clampThinkingLevelToAllowed(props.current, levels);
 	const currentIndex = Math.max(
 		0,
@@ -149,7 +152,12 @@ export function ThinkingLevelDropdown(props: { current?: string; levels?: Thinki
 			props.onPick(level.value);
 		}
 	};
-	return (
+	return unsupported ? (
+		// 明确不支持思考：只给一句结论，不给可拖的滑条 / 弹层。
+		<Button variant="ghost" size="sm" className="h-7 min-w-0 shrink-0 rounded-md px-2 text-control font-medium text-muted-foreground/70" disabled title={t("app.thinkingPickerUnsupported")} aria-label={t("app.thinkingPickerUnsupported")}>
+			<span className="max-w-[16ch] truncate">{t("app.thinkingUnsupportedShort")}</span>
+		</Button>
+	) : (
 		<Popover open={props.open} onOpenChange={handleOpenChange}>
 			<PopoverTrigger asChild>
 				<Button variant="ghost" size="sm" className="h-7 min-w-0 shrink-0 rounded-md px-2 text-control font-medium text-muted-foreground hover:bg-muted/60" disabled={props.disabled} title={t("app.thinkingPickerTitle")} aria-label={t("app.thinkingPickerTitle")}>

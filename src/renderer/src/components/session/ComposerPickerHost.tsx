@@ -7,6 +7,8 @@ import { ComposerSkillPicker } from "./ComposerSkillPicker";
 import { t } from "../../i18n";
 import { ConfirmDialog } from "../app/AppParts";
 import type { ComposerPickerKind } from "../../hooks/useSessionComposerController";
+import type { ImageGenConfigFile } from "../../../../shared/imageGenConfig";
+import type { VideoGenConfigFile } from "../../../../shared/videoGenConfig";
 import { useSessionPreferenceController } from "../../hooks/useSessionPreferenceController";
 
 export type ComposerPickerHostProps = {
@@ -34,6 +36,16 @@ export type ComposerPickerHostProps = {
 	defaultThinkingLevel?: string;
 	/** pi settings.modelThinkingLevels 快照（引导页预选默认的一部分）：按当前模型反查每模型默认档位。 */
 	modelThinkingLevels?: Record<string, string>;
+	/**
+	 * 生图 / 生视频模型目录：把两类媒体模型作为分类列在同一个月模型选择器里，
+	 * 选中即写回各自配置并切到对应模式（只在本会话后端/阶段能切时提供）。
+	 */
+	mediaCatalog?: {
+		imageGen?: { config: ImageGenConfigFile; activeProviderId?: string; activeModel?: string };
+		videoGen?: { config: VideoGenConfigFile; activeProviderId?: string; activeModel?: string };
+		canPick: boolean;
+		onPick: (kind: "imagegen" | "videogen", providerId: string, modelId: string) => void;
+	};
 };
 
 /**
@@ -108,6 +120,20 @@ export function ComposerPickerHost(props: ComposerPickerHostProps) {
 					onToggleHideModel={(provider, modelId) => void preference.toggleHideModel(provider, modelId)}
 					// 用量查询链路随会话后端：DSH 目录的 provider 是 route 名，配置/凭据走 dsh 链路
 					backend={preference.isDshSession ? "dsh" : "pi"}
+					// 生图 / 生视频模型作为分类列在同一选择器：选中即写回各自配置并切到对应模式。
+					// 只有本会话能切时才提供（已有对话内容 / 远端会话 / ACP 不提供）。
+					mediaCatalog={
+						props.mediaCatalog
+							? {
+									...props.mediaCatalog,
+									onPick: (kind, providerId, modelId) => {
+										props.mediaCatalog?.onPick(kind, providerId, modelId);
+										// 选定媒体模型 = 用户意图已达成，直接关弹层（与语言模型选中后行为一致）。
+										props.onClose();
+									},
+								}
+							: undefined
+					}
 				/>
 			);
 		}

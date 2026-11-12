@@ -238,6 +238,7 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 			defaultModel={composer.dshDefaultModel ?? composer.bootstrapDefaultModel}
 			defaultThinkingLevel={composer.dshDefaultThinkingLevel ?? composer.bootstrapDefaultThinkingLevel}
 			modelThinkingLevels={composer.bootstrapModelThinkingLevels}
+			mediaCatalog={composer.delivery.mediaModelPicker}
 		>
 			{(thinkingControl) => (
 				<ComposerRuntimeIntegrations sessionId={props.sessionId}>

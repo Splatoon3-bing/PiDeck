@@ -1,4 +1,6 @@
 import type { AvailableModel, ModelListReport } from "../../../../shared/types";
+import type { ImageGenConfigFile } from "../../../../shared/imageGenConfig";
+import type { VideoGenConfigFile } from "../../../../shared/videoGenConfig";
 // 下拉列表排序键与配置页 / 落盘顺序共用 shared 比较器（避免两边秩不一致）。
 import { compareModelRows } from "../../../../shared/modelOrder";
 import { resolveModelDisplayName } from "../../../../shared/modelDisplayName";
@@ -136,14 +138,127 @@ export function modelRowName(model: { id: string; name?: string }): string {
 }
 
 /**
- * 模型选择器行文案：单行 `provider/名称`。
+ * 模型行身份（第二行）：`provider · id`。
  *
- * 名称取 modelRowName（自定义 name 回落 id）。provider 前缀必须保留：收藏栏与已隐藏栏
- * 跨供应商混排，没有分组标题提供上下文，且不同渠道可能取了同一个别名。底层唯一标识
- * provider/id 不占版面，只出现在悬停 tooltip（`名称 · provider/id`）与搜索关键词里。
+ * 名称（name）是渠道别名，可能重复：本机 models.json 里 `cn:hy4free` 与 `cn:hy4std` 的 name
+ * 都是「Hy4」，`cn:hy3` 与 `cn:hy3-x` 都是「Hy3」。旧行文案只有 `provider/名称`，于是两行
+ * 长得一模一样、id 只藏在 tooltip 里——用户搜到的那行仍显示别名，结论是「我要的模型没有」。
+ * 因此 id 必须进正文：名称给可读性，id 给唯一身份。
  */
-export function modelRowLabel(model: { id: string; name?: string; provider: string }): string {
-	return `${model.provider}/${modelRowName(model)}`;
+export function modelRowIdentity(model: { id: string; provider: string }): string {
+	return `${model.provider} · ${model.id}`;
+}
+
+/**
+ * 思考档位的规范顺序（与 pi-ai 的 clampThinkingLevel 同源）：只用于挑「最高档」，
+ * 不参与展示顺序——展示顺序仍由后端返回的 levels 决定。
+ */
+const THINKING_LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** 一组档位里的最高档：规范顺序里有的一律按序取最大，未知档位（后端新增）按出现顺序兜底。 */
+export function highestThinkingLevel(levels: readonly string[]): string {
+	let best: string | undefined;
+	let bestRank = -1;
+	for (const level of levels) {
+		const normalized = level.trim();
+		if (!normalized || normalized === "off") continue;
+		const rank = (THINKING_LEVEL_ORDER as readonly string[]).indexOf(normalized);
+		// 未知档位（rank=-1）不覆盖已知档位，但整体没有已知档位时用它兜底。
+		if (rank > bestRank) {
+			best = normalized;
+			bestRank = rank;
+		}
+	}
+	return best ?? "off";
+}
+
+/**
+ * 模型思考能力的展示口径（纯函数，可单测）：
+ * - unsupported：后端明确只接受 off（或 --list-models 的 thinking 列为 no）——模型没有思考能力；
+ * - supported：后端给出权威档位，maxLevel 是其中最高的一档（如 high / max）；
+ * - unknown：能力尚未探测（旧 pi / probe 未就绪）——既不能说支持也不能说不支持，
+ *   调用方保持旧行为（全量档位回退），不能凭空宣称「不支持」。
+ */
+export type ModelThinkingSupport = { kind: "unknown" } | { kind: "unsupported" } | { kind: "supported"; maxLevel: string };
+
+export function resolveModelThinkingSupport(model: { reasoning?: boolean; thinkingLevels?: readonly string[] }): ModelThinkingSupport {
+	const levels = model.thinkingLevels;
+	if (levels !== undefined) {
+		const maxLevel = highestThinkingLevel(levels);
+		return maxLevel === "off" ? { kind: "unsupported" } : { kind: "supported", maxLevel };
+	}
+	if (model.reasoning === false) return { kind: "unsupported" };
+	return { kind: "unknown" };
+}
+
+/**
+ * 生图 / 生视频模型的分类视图（纯函数，可单测）。
+ *
+ * 为什么不在同一个目录里：这两类模型的配置与凭据完全独立（imagegen.json / videogen.json），
+ * 不在 pi 的模型目录里，也不接受 set_model。选择器把它们作为**独立分类**列出来（按供应商分组），
+ * 选中即切到对应模式——让用户在一个地方看全「我能用的模型」，而不是靠记模式再去找。
+ *
+ * 能力标注只写配置里确有的事实：
+ * - 生图模型恒为文生图，生视频模型恒为文生视频（一期没有参考素材）；
+ * - 「能接参考图」是**供应商级**声明（referenceMode，见 shared/imageGenConfig）：同一网关下
+ *   可能只有带 -edit 的模型真能改图（实测 hunyuan-image-alpha 收 edits 请求直接 4xx），
+ *   因此不能在每一行上都打「改图」——那会把用户引到会失败的组合上。放到分组标题提示。
+ */
+export type MediaModelCapability = "textToImage" | "textToVideo";
+
+export type MediaModelGroup = {
+	/** 分组 id：与语言模型的 `provider:<名称>` 隔离命名空间，避免同名供应商撞组。 */
+	id: string;
+	providerId: string;
+	providerLabel: string;
+	models: Array<{ id: string; capabilities: MediaModelCapability[] }>;
+	/** 供应商声明了参考图输入方式（edits / image-field）：分组提示「可带参考图」，不声称每个模型都行。 */
+	supportsReferenceImage?: boolean;
+};
+
+function uniqModelIds(models: readonly string[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of models) {
+		const id = typeof raw === "string" ? raw.trim() : "";
+		if (!id || seen.has(id)) continue;
+		seen.add(id);
+		out.push(id);
+	}
+	return out;
+}
+
+export function buildImageGenModelGroups(config: Pick<ImageGenConfigFile, "providers"> | undefined): MediaModelGroup[] {
+	if (!config) return [];
+	const groups: MediaModelGroup[] = [];
+	for (const provider of config.providers) {
+		const models = uniqModelIds(provider.models ?? []);
+		if (models.length === 0) continue;
+		groups.push({
+			id: `imagegen:${provider.id}`,
+			providerId: provider.id,
+			providerLabel: provider.name?.trim() || provider.id,
+			models: models.map((id) => ({ id, capabilities: ["textToImage"] })),
+			...(provider.referenceMode && provider.referenceMode !== "none" ? { supportsReferenceImage: true } : {}),
+		});
+	}
+	return groups;
+}
+
+export function buildVideoGenModelGroups(config: Pick<VideoGenConfigFile, "providers"> | undefined): MediaModelGroup[] {
+	if (!config) return [];
+	const groups: MediaModelGroup[] = [];
+	for (const provider of config.providers) {
+		const models = uniqModelIds(provider.models ?? []);
+		if (models.length === 0) continue;
+		groups.push({
+			id: `videogen:${provider.id}`,
+			providerId: provider.id,
+			providerLabel: provider.name?.trim() || provider.id,
+			models: models.map((id) => ({ id, capabilities: ["textToVideo"] })),
+		});
+	}
+	return groups;
 }
 
 /**

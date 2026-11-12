@@ -28,8 +28,21 @@ import { computeModelDisplay, formatModelName, formatModelRef, resolveComposerLi
 import { backendLockCopyKeys } from "../../utils/remoteCapabilityLimits";
 import { WELCOME_DSH_MODEL_KEY, WELCOME_MODEL_KEY, isWelcomeModelLost, readWelcomeDshModelPreference, readWelcomeModelPreference, shouldClearWelcomePreference } from "../../utils/chatSessionBootstrap";
 import { useBackendModelCatalog } from "../../hooks/useBackendModelCatalog";
-import { CommandPickerGroup, CommandPickerPanel, type CommandPickerFilter } from "../ui-shadcn/command-picker";
-import { computeModelPickerDefaultExpanded, groupModelsByProvider, modelPickerSearchFilter, modelRowLabel, modelRowName, orderProviderGroups, resolveModelPickerBody } from "./sessionPickerOptions";
+import { CommandPickerGroup, CommandPickerPanel, CommandPickerSectionLabel, type CommandPickerFilter } from "../ui-shadcn/command-picker";
+import {
+	buildImageGenModelGroups,
+	buildVideoGenModelGroups,
+	computeModelPickerDefaultExpanded,
+	groupModelsByProvider,
+	modelPickerSearchFilter,
+	modelRowIdentity,
+	modelRowName,
+	orderProviderGroups,
+	resolveModelPickerBody,
+	resolveModelThinkingSupport,
+	type MediaModelCapability,
+	type MediaModelGroup,
+} from "./sessionPickerOptions";
 import { ComposerModeChip } from "./composer/ComposerModeChip";
 import { resolveAcpConfigSelect, flattenAcpConfigOptions, isRenderableAcpConfigEntry, splitAcpConfigEntries, type AcpConfigEntry } from "./acpConfigSelect";
 import { AcpConfigGlyph } from "./AcpConfigGlyph";
@@ -1044,6 +1057,46 @@ function ModelListStatusGuide(props: { report: ModelListReport | null; refreshin
 }
 
 /**
+ * 模型能力徽标的语义色：推理走思考身份色（与思考芯片同一变量），视觉走主题强调色，
+ * 不支持思考用中性灰——它是一条限制说明，不能抢视觉。
+ */
+const MODEL_CAPABILITY_CHIP_CLASS = {
+	thinking: "bg-[color-mix(in_srgb,var(--color-thinking)_14%,transparent)] text-[var(--color-thinking)]",
+	noThinking: "bg-muted text-muted-foreground",
+	vision: "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]",
+	media: "bg-[color-mix(in_srgb,var(--color-brand-green)_14%,transparent)] text-[var(--color-brand-green)]",
+} as const;
+
+type ModelCapabilityChip = { kind: keyof typeof MODEL_CAPABILITY_CHIP_CLASS; label: string };
+
+/**
+ * 语言模型行的能力徽标：思考（最高档 / 不支持）/ 视觉。
+ *
+ * 思考口后以后端上报的能力为准（capability cache 的 thinkingLevels）：支持到 high 就只有 high，
+ * 只接受 off 的模型直接标「不支持思考」，而不是让用户在滑条上试错后才碰壁。
+ * 能力未探测（unknown）时不出徽标——宁可不说，也不能凭空断言支持或不支持。
+ */
+function modelCapabilityChips(model: AvailableModel): ModelCapabilityChip[] {
+	const chips: ModelCapabilityChip[] = [];
+	const thinking = resolveModelThinkingSupport(model);
+	if (thinking.kind === "supported") chips.push({ kind: "thinking", label: t("app.modelCapabilityThinking", { level: thinking.maxLevel }) });
+	else if (thinking.kind === "unsupported") chips.push({ kind: "noThinking", label: t("app.modelCapabilityThinkingUnsupported") });
+	if (model.images === true || model.input?.includes("image") === true) chips.push({ kind: "vision", label: t("app.modelCapabilityVision") });
+	return chips;
+}
+
+/** 生图/生视频模型行的能力标注（文生图 / 文生视频）。 */
+const MEDIA_CAPABILITY_LABEL: Record<MediaModelCapability, () => string> = {
+	textToImage: () => t("app.mediaCapabilityTextToImage"),
+	textToVideo: () => t("app.mediaCapabilityTextToVideo"),
+};
+
+/** 生图/生视频分类在「不能切」的会话里只读时的说明行（点了也不会生效，先把原因写清楚）。 */
+function MediaCategoryDisabledHint() {
+	return <p className="px-3 pb-1 text-micro text-muted-foreground">{t("app.modelCategoryMediaLockedHint")}</p>;
+}
+
+/**
  * 首次加载态：模型目录还没返回任何报告时的占位。
  * 旧实现在此状态下面板完全空白（models=[] 且 report=null 两个分支都不命中），
  * 用户以为「选择器里没有模型」；改为明确的加载提示。
@@ -1090,6 +1143,18 @@ export function ModelPicker(props: {
 	onToggleHideModel?: (provider: string, modelId: string) => void;
 	/** 打开时展开所有供应商分组：用于「从全部模型里挑一个」的场景（如外部连接的模型优先级）。 */
 	expandAllProviders?: boolean;
+	/**
+	 * 生图 / 生视频模型目录（不在 pi 目录里，凭据在 imagegen.json / videogen.json）：
+	 * 作为独立分类列在同一选择器里，标注文生图 / 改图 / 文生视频，选中即切到对应模式。
+	 * 缺省不传 = 不展示这两类（设置页的模型选择器不涉及媒体后端）。
+	 */
+	mediaCatalog?: {
+		imageGen?: { config: ImageGenConfigFile; activeProviderId?: string; activeModel?: string };
+		videoGen?: { config: VideoGenConfigFile; activeProviderId?: string; activeModel?: string };
+		/** 当前会话是否能切到媒体模式（已有对话内容的会话不行）；false = 仅展示，不可选。 */
+		canPick: boolean;
+		onPick: (kind: "imagegen" | "videogen", providerId: string, modelId: string) => void;
+	};
 }) {
 	const currentModelKey = props.current?.provider && props.current?.modelId ? `${props.current.provider}/${props.current.modelId}` : undefined;
 	const favoritesSet = new Set(props.favoriteModels ?? []);
@@ -1128,14 +1193,22 @@ export function ModelPicker(props: {
 	// 默认展开集合（「当前选中模型可见」驱动）：只展开收藏栏 + 当前模型所在提供商，
 	// 其余提供商折叠；无收藏且无当前模型时回退第一个提供商。折叠是派生状态，
 	// 模型目录/收藏异步到达后，未覆盖的分组会自动按新集合生效，不再有“打开时全展开”的时序问题。
-	const defaultExpandedIds = new Set(
-		computeModelPickerDefaultExpanded({
+	const defaultExpandedIds = new Set([
+		...computeModelPickerDefaultExpanded({
 			favorites,
 			current: props.current,
 			providers: sortedProviders,
 			expandAll: props.expandAllProviders,
 		}),
-	);
+	]);
+	// 生图 / 生视频分类（独立配置文件，不在 pi 目录里）：目录小且分类本身就是卖点，
+	// 默认全部展开——否则用户得先猜「它们在哪个折叠组里」。
+	const imageGenGroups = buildImageGenModelGroups(props.mediaCatalog?.imageGen?.config);
+	const videoGenGroups = buildVideoGenModelGroups(props.mediaCatalog?.videoGen?.config);
+	for (const group of [...imageGenGroups, ...videoGenGroups]) defaultExpandedIds.add(group.id);
+	// 媒体分类能否点选：生图/生视频是独立后端，切过去要求会话还没产生内容（主进程会拒），
+	// 已开始对话的会话只展示不可选，并在分类下写明原因——不能给点了没反应的入口。
+	const mediaPickable = props.mediaCatalog?.canPick === true;
 	// 主体状态：加载中 / 失败或空态引导 / 模型列表（纯函数，见 sessionPickerOptions）。
 	const bodyState = resolveModelPickerBody({
 		modelCount: props.models.length,
@@ -1160,10 +1233,9 @@ export function ModelPicker(props: {
 		// 分组各渲染一行时，value 必须唯一，否则鼠标悬停/键盘选中会让两行同时高亮。
 		// data-picker-value 仍保留模型 key，供面板“当前模型滚动定位”使用。
 		const itemValue = valueOverride ?? modelKey;
-		// 行文案：provider/名称，单行（原双行「name + provider/id」视觉太重，id 收进 tooltip）。
-		const labels = modelRowLabel(model);
+		const capabilities = modelCapabilityChips(model);
 		return (
-			<CommandItem key={itemValue} value={itemValue} data-picker-value={modelKey} keywords={[model.name ?? "", model.id, model.provider, modelKey]} onSelect={() => props.onPick(model)} className="group min-h-9 items-center gap-2 rounded-md px-2.5 py-1">
+			<CommandItem key={itemValue} value={itemValue} data-picker-value={modelKey} keywords={[model.name ?? "", model.id, model.provider, modelKey]} onSelect={() => props.onPick(model)} className="group items-center gap-2 rounded-md px-2.5 py-1.5">
 				{/* 收藏/取消收藏按钮：填充星为收藏，空心为未收藏 */}
 				{props.onToggleFavorite && (
 					<button
@@ -1179,8 +1251,22 @@ export function ModelPicker(props: {
 						<Star size={14} strokeWidth={1.8} fill={favorited ? "currentColor" : "none"} />
 					</button>
 				)}
-				<span className="min-w-0 flex-1 truncate font-mono text-control font-medium text-foreground" title={`${modelRowName(model)} · ${modelKey}`}>
-					{labels}
+				{/* 两行式：名称给可读性（渠道别名/中文名），`provider · id` 给唯一身份——
+				    重名模型（两个「Hy4」）只显示名称时用户会以为自己要的那个不存在。 */}
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="flex min-w-0 items-center gap-1.5">
+						<span className="min-w-0 truncate text-control font-medium text-foreground" title={`${modelRowName(model)} · ${modelKey}`}>
+							{modelRowName(model)}
+						</span>
+						{capabilities.map((chip) => (
+							<span key={chip.kind} className={`shrink-0 rounded px-1 py-px text-micro leading-4 font-medium ${MODEL_CAPABILITY_CHIP_CLASS[chip.kind]}`}>
+								{chip.label}
+							</span>
+						))}
+					</span>
+					<span className="min-w-0 truncate font-mono text-micro text-muted-foreground" title={modelKey}>
+						{modelRowIdentity(model)}
+					</span>
 				</span>
 				{/* 供应商公开报价徽章（折扣/免费）：只有 TokenDance 目录模型带 priceTag */}
 				<ModelPriceTagBadge tag={model.priceTag} />
@@ -1199,6 +1285,44 @@ export function ModelPicker(props: {
 						<EyeOff size={13} strokeWidth={1.8} />
 					</button>
 				)}
+				{selected ? <Check size={15} className="ml-auto shrink-0 text-primary" aria-hidden="true" /> : null}
+			</CommandItem>
+		);
+	};
+
+	/** 生图/生视频模型行：独立的配置与选中语义（写回各自配置 + 切到对应模式），不参与收藏/隐藏。 */
+	const renderMediaRow = (kind: "imagegen" | "videogen", group: MediaModelGroup, model: MediaModelGroup["models"][number]) => {
+		const media = props.mediaCatalog;
+		const active = kind === "imagegen" ? media?.imageGen : media?.videoGen;
+		const selected = active?.activeProviderId === group.providerId && active?.activeModel === model.id;
+		const capabilityLabels = model.capabilities.map((capability) => MEDIA_CAPABILITY_LABEL[capability]());
+		const itemValue = `${kind}:${group.providerId}/${model.id}`;
+		const pickable = media?.canPick === true;
+		return (
+			<CommandItem
+				key={itemValue}
+				value={itemValue}
+				keywords={[model.id, group.providerId, group.providerLabel, ...capabilityLabels]}
+				disabled={!pickable}
+				onSelect={() => {
+					if (!pickable) return;
+					media?.onPick(kind, group.providerId, model.id);
+				}}
+				className="group items-center gap-2 rounded-md px-2.5 py-1.5"
+			>
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="flex min-w-0 items-center gap-1.5">
+						<span className="min-w-0 truncate font-mono text-control font-medium text-foreground" title={`${model.id} · ${group.providerId}`}>
+							{model.id}
+						</span>
+						{capabilityLabels.map((label) => (
+							<span key={label} className={`shrink-0 rounded px-1 py-px text-micro leading-4 font-medium ${MODEL_CAPABILITY_CHIP_CLASS.media}`}>
+								{label}
+							</span>
+						))}
+					</span>
+					<span className="min-w-0 truncate text-micro text-muted-foreground">{group.providerLabel}</span>
+				</span>
 				{selected ? <Check size={15} className="ml-auto shrink-0 text-primary" aria-hidden="true" /> : null}
 			</CommandItem>
 		);
@@ -1244,21 +1368,53 @@ export function ModelPicker(props: {
 							{favorites.map((model) => renderModelRow(model, `favorites/${model.provider}/${model.id}`))}
 						</CommandPickerGroup>
 					)}
+					<CommandPickerSectionLabel label={t("app.modelCategoryLanguage")} />
 					{sortedProviders.map((provider) => (
 						<CommandPickerGroup id={`provider:${provider}`} key={provider} label={provider} count={groupedModels[provider].length} countText={t("config.count.models", { count: groupedModels[provider].length })} trailing={<ProviderUsageInline provider={provider} variant="row" backend={props.backend} />}>
 							{groupedModels[provider].map((model) => renderModelRow(model))}
 						</CommandPickerGroup>
 					))}
+					{imageGenGroups.length > 0 && (
+						<>
+							<CommandPickerSectionLabel label={t("app.modelCategoryImageGen")} />
+							{!mediaPickable && <MediaCategoryDisabledHint />}
+							{imageGenGroups.map((group) => (
+								<CommandPickerGroup
+									id={group.id}
+									key={group.id}
+									label={group.providerLabel}
+									count={group.models.length}
+									countText={t("config.count.models", { count: group.models.length })}
+									trailing={group.supportsReferenceImage ? <span className="shrink-0 text-micro text-muted-foreground">{t("app.mediaCapabilityReferenceImage")}</span> : undefined}
+								>
+									{group.models.map((model) => renderMediaRow("imagegen", group, model))}
+								</CommandPickerGroup>
+							))}
+						</>
+					)}
+					{videoGenGroups.length > 0 && (
+						<>
+							<CommandPickerSectionLabel label={t("app.modelCategoryVideoGen")} />
+							{!mediaPickable && <MediaCategoryDisabledHint />}
+							{videoGenGroups.map((group) => (
+								<CommandPickerGroup id={group.id} key={group.id} label={group.providerLabel} count={group.models.length} countText={t("config.count.models", { count: group.models.length })}>
+									{group.models.map((model) => renderMediaRow("videogen", group, model))}
+								</CommandPickerGroup>
+							))}
+						</>
+					)}
 					{hiddenModelList.length > 0 && props.onToggleHideModel && (
 						<CommandPickerGroup id="hidden-models" label={t("app.modelHiddenSection")} count={hiddenModelList.length} countText={t("config.count.models", { count: hiddenModelList.length })}>
 							{hiddenModelList.map((model) => {
 								const modelKey = `${model.provider}/${model.id}`;
-								// 与可见行同一套文案规则（provider/名称，单行），只是整体弱化显示。
-								const labels = modelRowLabel(model);
+								// 与可见行同一套两行文案，只是整体弱化显示。
 								return (
-									<CommandItem key={`hidden/${modelKey}`} value={`hidden/${modelKey}`} data-picker-value={modelKey} keywords={[model.name ?? "", model.id, model.provider, modelKey]} className="group min-h-9 items-center gap-2 rounded-md px-2.5 py-1 text-muted-foreground" onSelect={() => props.onPick(model)}>
-										<span className="min-w-0 flex-1 truncate font-mono text-control opacity-70" title={`${modelRowName(model)} · ${modelKey}`}>
-											{labels}
+									<CommandItem key={`hidden/${modelKey}`} value={`hidden/${modelKey}`} data-picker-value={modelKey} keywords={[model.name ?? "", model.id, model.provider, modelKey]} className="group items-center gap-2 rounded-md px-2.5 py-1.5 text-muted-foreground" onSelect={() => props.onPick(model)}>
+										<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+											<span className="min-w-0 truncate text-control font-medium opacity-70" title={`${modelRowName(model)} · ${modelKey}`}>
+												{modelRowName(model)}
+											</span>
+											<span className="min-w-0 truncate font-mono text-micro opacity-70">{modelRowIdentity(model)}</span>
 										</span>
 										<ModelPriceTagBadge tag={model.priceTag} />
 										<button

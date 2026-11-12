@@ -1312,6 +1312,18 @@ export function useSessionComposerController(options: UseSessionComposerControll
 		},
 		[imageGenConfig, setImageGenConfig],
 	);
+	// 生视频选择写回：与生图同构（内存 atom + 独立配置文件落盘）。切供应商时参数回到该供应商
+	// 默认值（activeParams 是会话级参数，不同供应商的合法域不同，不能带过去）。
+	const setVideoGenSelection = useCallback(
+		(providerId: string, modelId: string) => {
+			const nextProvider = findVideoGenProvider(videoGenConfig, providerId);
+			if (!nextProvider?.models.includes(modelId)) return;
+			const next = { ...videoGenConfig, activeProviderId: nextProvider.id, activeModel: modelId, activeParams: { ...nextProvider.defaults } };
+			setVideoGenConfig(next);
+			void desktopApi.videogen.saveConfig(next).catch(() => undefined);
+		},
+		[videoGenConfig, setVideoGenConfig],
+	);
 
 	const generateImage = useCallback(async () => {
 		const prompt = draft.trim();
@@ -2641,17 +2653,42 @@ export function useSessionComposerController(options: UseSessionComposerControll
 			imageGenModeLocked: hasImageGenHistory || record?.backend === "imagegen",
 			videoGenConfig,
 			videoGenModeLocked: isVideoGenBackend,
+			/**
+			 * 模型选择器里的生图 / 生视频分类：目录来自各自独立配置，选中即写回选择并切模式。
+			 *
+			 * 切媒体模式走 changeBackend（而不是只改 mode）：生图/生视频是**独立后端**，
+			 * 凭据与请求链路都不在 pi 里；它同时负责「会话已有内容则拒绝」的护栏，
+			 * 所以 canPick 直接用同一判据（backendLocked）——不能给一个点了被默默拒的入口。
+			 * 远端会话与 ACP 不提供：前者媒体任务不在远端主机跑，后者模型由 agent CLI 自持。
+			 */
+			mediaModelPicker:
+				isRemoteProjectSession || isAcpBackend
+					? undefined
+					: {
+							imageGen: { config: imageGenConfig, activeProviderId: activeImageGenProviderId, activeModel: activeImageGenModelId },
+							videoGen: { config: videoGenConfig, activeProviderId: videoGenConfig.activeProviderId, activeModel: videoGenConfig.activeModel },
+							canPick: !backendLocked,
+							onPick: (kind: "imagegen" | "videogen", providerId: string, modelId: string) => {
+								if (backendLocked) return;
+								if (kind === "imagegen") {
+									const nextProvider = findImageGenProvider(imageGenConfig, providerId);
+									if (!nextProvider?.models.includes(modelId)) return;
+									persistImageGenSelection(nextProvider.id, modelId);
+								} else {
+									const nextProvider = findVideoGenProvider(videoGenConfig, providerId);
+									if (!nextProvider?.models.includes(modelId)) return;
+									setVideoGenSelection(nextProvider.id, modelId);
+								}
+								void changeBackend(kind);
+							},
+						},
 			submittingVideo,
 			submitVideo,
 			videoConfirmPending,
 			confirmVideoGen,
 			cancelVideoGen,
 			setVideoGenSelection: (providerId: string, modelId: string) => {
-				const nextProvider = findVideoGenProvider(videoGenConfig, providerId);
-				if (!nextProvider?.models.includes(modelId)) return;
-				const next = { ...videoGenConfig, activeProviderId: nextProvider.id, activeModel: modelId, activeParams: { ...nextProvider.defaults } };
-				setVideoGenConfig(next);
-				void desktopApi.videogen.saveConfig(next).catch(() => undefined);
+				setVideoGenSelection(providerId, modelId);
 			},
 			setVideoGenParam: (key: "resolution" | "duration" | "ratio", value: string | undefined) => {
 				const next = { ...videoGenConfig, activeParams: { ...videoGenConfig.activeParams, [key]: value } };

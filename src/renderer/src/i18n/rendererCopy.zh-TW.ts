@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: 6c5072993f702b35e366a6ad1ab713aeae0767725cb14a6601059bf52ec1d254（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: ed5abaa83e49c01c9fef6d61fc5949802c2fcb3261d974a8103d42e800d29089（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -1018,6 +1018,17 @@ export const zhTW: Record<TranslationKey, string> = {
 	"app.themeDockTooltip": "主題：{mode}（點選切換）",
 	"app.commandPickerEmpty": "沒有匹配的選項",
 	"app.commandPickerSearch": "搜尋選項",
+	"app.modelCategoryLanguage": "語言模型",
+	"app.modelCategoryImageGen": "生圖模型",
+	"app.modelCategoryVideoGen": "生影片模型",
+	"app.modelCategoryMediaLockedHint": "當前會話已開始對話，生圖 / 生影片需新建會話",
+	"app.modelCapabilityThinking": "思考 {level}",
+	"app.modelCapabilityThinkingUnsupported": "不支援思考",
+	"app.modelCapabilityVision": "視覺",
+	"app.mediaCapabilityTextToImage": "文生圖",
+	"app.mediaCapabilityTextToVideo": "文生影片",
+	"app.mediaCapabilityReferenceImage": "可帶參考圖",
+	"app.thinkingUnsupportedShort": "不支援思考",
 	"app.modelPickerEmpty": "沒有匹配的模型",
 	"app.modelPickerSearch": "搜尋模型、供應商或 ID",
 	"app.modelPickerTitle": "選擇模型",
@@ -6605,6 +6616,7 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.connecting": "連線中…",
 	"web.imageGenNotConfigured": "生圖供應商未配置：請在桌面端「設定 → 生圖」配置後重試。",
 	"web.imageGenFailed": "生圖失敗，請檢查供應商配置或稍後重試。",
+	"web.imageGenGenerating": "正在生成…",
 	"web.offline": "裝置離線",
 	"web.applyUpdate": "更新",
 	"web.applyUpdateHint": "前端已重新構建，點選載入新版本",
@@ -6903,6 +6915,7 @@ export const zhTW: Record<TranslationKey, string> = {
 	"web.fileViewerBinary": "二進位制檔案，不支援預覽",
 	"web.previewClose": "關閉",
 	"web.previewLoadFailed": "檔案讀取失敗",
+	"web.previewOpenExternally": "在新標籤開啟",
 	"web.diffNotFound": "未找到該檔案的 Git 變更（可能已被提交）",
 	"web.diffFallbackToFile": "該檔案已無未提交改動（可能已提交）或內容超限，已回退展示當前檔案內容",
 	"web.diffUnavailableHint": "內容過大或暫不可對比，可在會話檔案 chip 開啟全屏預覽檢視當前內容",

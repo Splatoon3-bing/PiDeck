@@ -75,6 +75,22 @@ export function CommandPickerGroup(props: {
 }
 
 /**
+ * 模型选择器的一级分类标题（语言模型 / 生图模型 / 生视频模型）。
+ *
+ * 只渲染标题、不包裹子项：分组仍由 CommandPickerGroup 拥有（折叠状态是它的事）。
+ * 搜索态直接隐藏——搜索是「按名字找具体模型」，保留分类标题只会在过滤后留下一串空标题。
+ */
+export function CommandPickerSectionLabel(props: { label: ReactNode }) {
+	const { searchActive } = useContext(CommandPickerContext);
+	if (searchActive) return null;
+	return (
+		<div data-picker-section className="px-3 pt-2.5 pb-1 text-caption font-semibold tracking-wide text-muted-foreground/80">
+			{props.label}
+		</div>
+	);
+}
+
+/**
  * Command 选择器主体：统一标题、搜索、折叠控制、选中项定位、列表空态和底部操作区。
  * Dialog、Popover 只负责浮层容器，因此引导页和会话内选择器使用完全相同的内容结构。
  */
