@@ -50,6 +50,7 @@ import {
 	favoritesOpenSessionRequestAtom,
 	hiddenComposerFeaturesAtom,
 	imageGenConfigAtom,
+	videoGenConfigAtom,
 	enhanceModelAtom,
 	enhanceIncludeContextAtom,
 	promptSuggestionEnabledAtom,
@@ -336,6 +337,7 @@ export function App() {
 	const removeSessionState = useSetAtom(removeSessionStateAtom);
 	const removeSessionComposerState = useSetAtom(removeSessionComposerStateAtom);
 	const setImageGenConfig = useSetAtom(imageGenConfigAtom);
+	const setVideoGenConfig = useSetAtom(videoGenConfigAtom);
 	const setEnhanceModel = useSetAtom(enhanceModelAtom);
 	const setEnhanceIncludeContext = useSetAtom(enhanceIncludeContextAtom);
 	const setPromptSuggestionEnabled = useSetAtom(promptSuggestionEnabledAtom);
@@ -1794,6 +1796,12 @@ export function App() {
 		void api.imagegen
 			.getConfig()
 			.then(setImageGenConfig)
+			.catch(() => undefined);
+		// 生视频配置与生图同构：启动时必须写进 atom，否则 composer 只能拿到 EMPTY_VIDEO_GEN_CONFIG，
+		// 生视频底栏下拉与统一模型选择器里的「生视频模型」分类都是空的（要等配置页保存才有值）。
+		void api.videogen
+			.getConfig()
+			.then(setVideoGenConfig)
 			.catch(() => undefined);
 		void api.settings
 			.get()

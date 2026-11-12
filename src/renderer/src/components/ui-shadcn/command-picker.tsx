@@ -51,7 +51,7 @@ export function CommandPickerGroup(props: {
 	});
 
 	return (
-		<div className={cn("border-b border-border/45 last:border-b-0", props.className)}>
+		<div className={cn("border-b border-border/45 last:border-b-0 [&:has([cmdk-group][hidden])]:hidden", props.className)}>
 			<button
 				type="button"
 				className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-left text-control font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"

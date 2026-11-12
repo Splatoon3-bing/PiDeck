@@ -372,10 +372,14 @@ export function useSessionComposerController(options: UseSessionComposerControll
 	// 生图供应商/模型来自独立 imagegen.json，与会话 LLM 模型无关。
 	const activeImageGenProviderId = imageGenConfig.activeProviderId;
 	const activeImageGenModelId = imageGenConfig.activeModel;
+	// 引导页没有 catalog record，后端选择只存在本地 state（guideBackend）。媒体后端是独立
+	// 请求链路，composer mode 必须跟着它走：否则底栏按 backend 隐掉 LLM 模型 chip，
+	// 却拿不到生图/生视频参数栏——统一模型选择器里选中媒体模型正好走这条路径。
+	const guideMediaBackend = isGuideBootstrapSession && (guideBackend === "imagegen" || guideBackend === "videogen") ? guideBackend : undefined;
 	const mode: ComposerAgentMode =
-		record?.backend === "imagegen" || hasImageGenHistory
+		record?.backend === "imagegen" || hasImageGenHistory || guideMediaBackend === "imagegen"
 			? "imagegen"
-			: isVideoGenBackend
+			: isVideoGenBackend || guideMediaBackend === "videogen"
 				? "videogen"
 				: deriveComposerAgentMode({
 						backend: isDshBackend ? "dsh" : isAcpBackend ? "acp" : "pi",
@@ -383,9 +387,9 @@ export function useSessionComposerController(options: UseSessionComposerControll
 						planModeActive: runtime?.state?.planModeActive === true,
 						goalPhase: runtime?.state?.goal?.phase,
 					});
-	// 生图判据（与 ComposerComponents 的 imageGenComposer 同义）：模式 or 引导页选中的生图后端。
 	// 生图附件是参考图，@path 引用不会被解析：选图/拖入都统一进附件栏。
-	const imageGenComposer = mode === "imagegen" || (isGuideBootstrapSession && guideBackend === "imagegen");
+	// mode 现在已覆盖引导页的媒体后端选择，不再需要第二份 guideBackend 判断。
+	const imageGenComposer = mode === "imagegen";
 	// DSH 部署默认模型选择（settings.yaml agent-default-model）：草稿/未激活会话
 	// 的底栏与选择器用它展示默认模型/思考档位（host 会话创建前没有 runtime state）。
 	// settings.yaml 未配 reasoningEffort 时，回退到默认模型自身的 defaultEffort
