@@ -38,3 +38,12 @@ export function generateWebImage(input: { sessionId: string; prompt: string; ref
 		body: JSON.stringify({ ...input, ...(input.referenceImages?.length ? { referenceImages: input.referenceImages } : {}) }),
 	});
 }
+
+/** 选择生图模型（只写 activeProviderId/activeModel）：主进程按配置白名单校验后落盘。 */
+export function saveWebImageGenSelection(input: { providerId: string; modelId: string }): Promise<{ ok: true; activeProviderId: string; activeModel: string }> {
+	return jsonRequest<{ ok: true; activeProviderId: string; activeModel: string }>("/api/imagegen/selection", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(input),
+	});
+}

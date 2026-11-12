@@ -1016,6 +1016,7 @@ export const enUS: Record<TranslationKey, string> = {
 	"app.modelCategoryLanguage": "Language models",
 	"app.modelCategoryImageGen": "Image models",
 	"app.modelCategoryVideoGen": "Video models",
+	"web.mediaVideoUnsupported": "Not available on web",
 	"app.modelCategoryMediaLockedHint": "This session already has messages. Start a new session to use image or video generation.",
 	"app.modelCapabilityThinking": "thinking {level}",
 	"app.modelCapabilityThinkingUnsupported": "no thinking",

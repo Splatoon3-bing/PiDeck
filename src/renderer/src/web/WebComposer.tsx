@@ -60,6 +60,10 @@ export function WebComposer(props: {
 	refreshingModels?: boolean;
 	onRefreshModels?: () => void;
 	onModelChange: (model: AvailableModel) => void;
+	/** 生图 / 生视频模型目录（独立配置文件）：选择器把它们作为分类列出。 */
+	mediaModels?: import("../../../main/web/WebMediaModels").WebMediaModels | null;
+	/** 选中生图模型：写回生图配置并切到生图后端（生视频在 Web 端仍只读）。 */
+	onPickImageModel?: (providerId: string, modelId: string) => void;
 	thinkingLevel?: string;
 	onThinkingChange: (level: string) => void;
 	/** 提交时携带的图片（data URL，已压缩）；父级在 onSend 后清空自己的附件态。 */
@@ -384,7 +388,7 @@ export function WebComposer(props: {
 										PiDeck 的 models.json 对它无意义——与桌面端 ComposerComponents 同规。 */}
 									{props.backend === "acp" ? null : (
 										<>
-											<WebModelSelector model={props.model} models={props.models} refreshing={props.refreshingModels} onRefresh={props.onRefreshModels} onChange={props.onModelChange} />
+											<WebModelSelector model={props.model} models={props.models} refreshing={props.refreshingModels} onRefresh={props.onRefreshModels} onChange={props.onModelChange} mediaModels={props.mediaModels} onPickImageModel={props.onPickImageModel} />
 											<WebThinkingSelector level={props.thinkingLevel} onChange={props.onThinkingChange} />
 										</>
 									)}

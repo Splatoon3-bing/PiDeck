@@ -23,8 +23,16 @@ import { cn } from "@/lib/utils";
 import { WebPickerSurface } from "./WebPickerSurface";
 import { buildModelGroups, formatContextWindow, modelCapabilityChips, modelKey, pushRecentModel, readRecentModels, writeRecentModels } from "./webModelPicker";
 
+// 生图 / 生视频分类与桌面端共用同一套纯函数（各自的独立配置文件，不在 pi 目录里）。
+import { buildImageGenModelGroups, buildVideoGenModelGroups, type MediaModelGroup } from "../components/session/sessionPickerOptions";
+import type { WebMediaModels } from "../../../main/web/WebMediaModels";
+
 /** 弹层行的扁平表示：分组标题与模型行混排，便于按窗口切片渲染。 */
-type ModelSheetRow = { kind: "group"; key: string; label: string } | { kind: "model"; key: string; item: AvailableModel };
+type ModelSheetRow =
+	| { kind: "group"; key: string; label: string }
+	| { kind: "model"; key: string; item: AvailableModel }
+	| { kind: "mediaGroup"; key: string; label: string; hint?: string }
+	| { kind: "media"; key: string; providerId: string; providerLabel: string; modelId: string; capabilities: MediaModelGroup["models"][number]["capabilities"]; selectable: boolean };
 
 /** 首屏渲染的行数（含分组标题）；模型表动辄 300+ 条，一次全渲染会造出上万像素的滚动容器。 */
 const MODEL_ROW_WINDOW = 40;
@@ -35,11 +43,18 @@ const MODEL_ROW_STEP = 40;
 const CAPABILITY_CHIP_CLASS = {
 	reasoning: "bg-[color-mix(in_srgb,var(--color-thinking)_14%,transparent)] text-[var(--color-thinking)]",
 	vision: "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]",
+	// 「不支持思考」是一条限制说明，用中性灰，不抢视觉。
+	noThinking: "bg-muted text-muted-foreground",
 } as const;
 
 function ModelRow(props: { item: AvailableModel; active: boolean; onSelect: () => void }) {
 	const name = resolveModelDisplayName(props.item.name, props.item.id);
-	const chips = modelCapabilityChips(props.item, { reasoning: t("web.modelCapabilityReasoning"), vision: t("web.modelCapabilityVision") });
+	const chips = modelCapabilityChips(props.item, {
+		reasoning: t("web.modelCapabilityReasoning"),
+		vision: t("web.modelCapabilityVision"),
+		thinking: (level) => t("app.modelCapabilityThinking", { level }),
+		noThinking: t("app.modelCapabilityThinkingUnsupported"),
+	});
 	const context = formatContextWindow(props.item.contextWindow);
 	return (
 		<button
@@ -74,6 +89,36 @@ function ModelRow(props: { item: AvailableModel; active: boolean; onSelect: () =
 }
 
 /** 把分组结果摊平成可切片的单行列表（组序由 buildModelGroups 决定，组内保持原序）。 */
+/** 媒体模型行（生图可点、生视频只读）：两行式，副行是供应商名与能力标注。 */
+function MediaRow(props: { row: Extract<ModelSheetRow, { kind: "media" }>; onSelect: () => void }) {
+	const labels = props.row.capabilities.map((capability) => (capability === "textToVideo" ? t("app.mediaCapabilityTextToVideo") : t("app.mediaCapabilityTextToImage")));
+	return (
+		<button
+			type="button"
+			data-testid="web-media-model-row"
+			data-selectable={props.row.selectable ? "true" : undefined}
+			aria-disabled={props.row.selectable ? undefined : true}
+			className={cn(
+				"group relative flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors pointer-coarse:min-h-14",
+				props.row.selectable ? "hover:bg-muted/60 focus-visible:bg-muted/60" : "cursor-default opacity-60",
+			)}
+			onClick={props.onSelect}
+		>
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="flex min-w-0 items-center gap-1.5">
+					<span className="min-w-0 truncate font-mono text-sm font-medium text-foreground">{props.row.modelId}</span>
+					{labels.map((label) => (
+						<span key={label} className="shrink-0 rounded bg-[color-mix(in_srgb,var(--color-brand-green)_14%,transparent)] px-1 py-px text-micro leading-4 font-medium text-[var(--color-brand-green)]">
+							{label}
+						</span>
+					))}
+				</span>
+				<span className="min-w-0 truncate text-micro text-muted-foreground">{props.row.providerLabel}</span>
+			</span>
+		</button>
+	);
+}
+
 function flattenModelRows(groups: ReturnType<typeof buildModelGroups>): ModelSheetRow[] {
 	const rows: ModelSheetRow[] = [];
 	for (const group of groups) {
@@ -83,7 +128,17 @@ function flattenModelRows(groups: ReturnType<typeof buildModelGroups>): ModelShe
 	return rows;
 }
 
-export function WebModelSelector(props: { model?: SessionModelPreference; models: AvailableModel[]; refreshing?: boolean; onRefresh?: () => void; onChange: (model: AvailableModel) => void }) {
+export function WebModelSelector(props: {
+	model?: SessionModelPreference;
+	models: AvailableModel[];
+	refreshing?: boolean;
+	onRefresh?: () => void;
+	onChange: (model: AvailableModel) => void;
+	/** 生图 / 生视频模型目录（独立配置文件）：作为独立分类列出，未加载时不展示这两类。 */
+	mediaModels?: WebMediaModels | null;
+	/** 选中生图模型：写回生图配置并切到生图后端（Web 端生视频仍不开放，只展示）。 */
+	onPickImageModel?: (providerId: string, modelId: string) => void;
+}) {
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const [rendered, setRendered] = useState(MODEL_ROW_WINDOW);
@@ -102,7 +157,41 @@ export function WebModelSelector(props: { model?: SessionModelPreference; models
 		return buildModelGroups(filtered, recentKeys, currentKey, t("web.recentModels"));
 	}, [models, query, recentKeys, currentKey]);
 
-	const rows = useMemo(() => flattenModelRows(groups), [groups]);
+	const languageRows = useMemo(() => flattenModelRows(groups), [groups]);
+	// 生图 / 生视频分类：与语言模型同一份过滤口径（按 query 过滤模型名/供应商），
+	// 分类标题在搜索时保留——它们是「这些模型属于哪类」的唯一线索。
+	const mediaRows = useMemo<ModelSheetRow[]>(() => {
+		const keyword = query.trim().toLowerCase();
+		const match = (text: string) => !keyword || text.toLowerCase().includes(keyword);
+		const out: ModelSheetRow[] = [];
+		const imageGroups = buildImageGenModelGroups(props.mediaModels?.imageGen);
+		if (imageGroups.length > 0) {
+			out.push({ kind: "group", key: "section:image", label: t("app.modelCategoryImageGen") });
+			for (const group of imageGroups) {
+				const models = group.models.filter((item) => match(`${item.id} ${group.providerLabel}`));
+				if (models.length === 0) continue;
+				out.push({ kind: "mediaGroup", key: `mediagroup:${group.id}`, label: group.providerLabel, ...(group.supportsReferenceImage ? { hint: t("app.mediaCapabilityReferenceImage") } : {}) });
+				for (const item of models) {
+					out.push({ kind: "media", key: `media:${group.id}:${item.id}`, providerId: group.providerId, providerLabel: group.providerLabel, modelId: item.id, capabilities: item.capabilities, selectable: Boolean(props.onPickImageModel) });
+				}
+			}
+		}
+		const videoGroups = buildVideoGenModelGroups(props.mediaModels?.videoGen);
+		if (videoGroups.length > 0) {
+			out.push({ kind: "group", key: "section:video", label: t("app.modelCategoryVideoGen") });
+			for (const group of videoGroups) {
+				const models = group.models.filter((item) => match(`${item.id} ${group.providerLabel}`));
+				if (models.length === 0) continue;
+				// 生视频只读：Web 端没有提交链路（长任务 + 事件流不在 Web 开放），如实标注而不是给一个点了没反应的入口。
+				out.push({ kind: "mediaGroup", key: `mediagroup:${group.id}`, label: group.providerLabel, hint: t("web.mediaVideoUnsupported") });
+				for (const item of models) {
+					out.push({ kind: "media", key: `media:${group.id}:${item.id}`, providerId: group.providerId, providerLabel: group.providerLabel, modelId: item.id, capabilities: item.capabilities, selectable: false });
+				}
+			}
+		}
+		return out;
+	}, [props.mediaModels, props.onPickImageModel, query]);
+	const rows = useMemo(() => [...languageRows, ...mediaRows], [languageRows, mediaRows]);
 	// 搜索词变化回到首屏窗口：结果集变小，保留旧窗口没有意义。
 	useEffect(() => setRendered(MODEL_ROW_WINDOW), [query]);
 	const visibleRows = rows.slice(0, Math.min(rendered, rows.length));
@@ -178,15 +267,28 @@ export function WebModelSelector(props: { model?: SessionModelPreference; models
 			{/* scroll-ok: bounded —— 行数有硬上限（受控分页 / 上限常量 / 固定枚举），不随数据无限增长。 */}
 			<div className="min-h-0 flex-1 overflow-y-auto px-2 py-1.5">
 				{rows.length === 0 ? <div className="px-3 py-8 text-center text-sm text-muted-foreground">{t("web.modelEmpty")}</div> : null}
-				{visibleRows.map((row) =>
-					row.kind === "group" ? (
-						<div key={row.key} className="px-3 pt-3 pb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/80 uppercase first:pt-1">
-							{row.label}
-						</div>
-					) : (
-						<ModelRow key={row.key} item={row.item} active={modelKey(row.item) === currentKey} onSelect={() => select(row.item)} />
-					),
-				)}
+				{visibleRows.map((row) => {
+					if (row.kind === "group") {
+						return (
+							<div key={row.key} className="px-3 pt-3 pb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/80 uppercase first:pt-1">
+								{row.label}
+							</div>
+						);
+					}
+					if (row.kind === "mediaGroup") {
+						return (
+							<div key={row.key} className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
+								<span className="min-w-0 truncate text-caption font-medium text-muted-foreground">{row.label}</span>
+								<span className="min-w-4 flex-1" />
+								{row.hint ? <span className="shrink-0 text-micro text-muted-foreground/80">{row.hint}</span> : null}
+							</div>
+						);
+					}
+					if (row.kind === "media") {
+						return <MediaRow key={row.key} row={row} onSelect={() => { if (!row.selectable) return; props.onPickImageModel?.(row.providerId, row.modelId); setOpen(false); }} />;
+					}
+					return <ModelRow key={row.key} item={row.item} active={modelKey(row.item) === currentKey} onSelect={() => select(row.item)} />;
+				})}
 				{hiddenCount > 0 ? (
 					<button ref={sentinelRef} type="button" className="mt-1 flex h-10 w-full items-center justify-center rounded-lg text-caption text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground" onClick={() => setRendered((current) => Math.min(rows.length, current + MODEL_ROW_STEP))}>
 						{t("web.moreSessions", { count: hiddenCount })}

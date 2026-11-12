@@ -13,7 +13,7 @@
  * 复用桌面设计 token、shadcn 组件、lucide 图标与 timeline/surfaces 样式类。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
@@ -24,6 +24,7 @@ import { WebSidebar, type WebSessionRowAction } from "./WebSidebar";
 import { WebSessionTabs } from "./WebSessionTabs";
 import { closeWebTab, parseStoredWebTabs, shouldShowWebTabs, WEB_TABS_STORAGE_KEY } from "./webSessionTabs";
 import { WebHeader, type WebHeaderStatus } from "./WebHeader";
+import { FileLinkBaseProvider } from "@/components/session/FileLinkBase";
 import { WebTimeline, uiMessageImages, uiMessageText, type WebTimelineJumpApi } from "./WebTimeline";
 import { forkPromptText, isLastUserMessageIn, resolveWebForkEntryId } from "./webForkMutation";
 import { WebComposer } from "./WebComposer";
@@ -38,9 +39,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui-shadcn/button";
 import { Input } from "@/components/ui-shadcn/input";
 import { webChatFetch } from "./webChatFetch";
-import { chatMessagesToUiMessages, createProject, createSession, deleteProject, fetchMessagePage, fetchModels, fetchState, fetchWebSettings, getWebAuthHeaders, respondToUi, setRuntimeModel, setRuntimeThinking, updateSessionRecord, updateWebSettings } from "./webApi";
+import { chatMessagesToUiMessages, createProject, createSession, deleteProject, fetchMediaModels, fetchMessagePage, fetchModels, fetchState, fetchWebSettings, getWebAuthHeaders, respondToUi, setRuntimeModel, setRuntimeThinking, updateSessionRecord, updateWebSettings } from "./webApi";
 import { abortRuntime, cloneRuntime, compactRuntime, copySession, deleteSession, downloadSessionHtml, editRuntimeMessage, deleteRuntimeMessage, prepareResend, renameSession, restartRuntime, activateRuntime, forkRuntimeSession, getForkMessages } from "./webApi";
-import { fetchRuntimeContextUsage, setRuntimePermission, setSessionSecurityLevel } from "./webApi";
+import { fetchRuntimeContextUsage, setRuntimePermission, setSessionSecurityLevel, webFileRawUrl } from "./webApi";
 import { dataUrlToFilePart } from "./webMessageParts";
 import { shouldFlushQueuedPrompt } from "./webQueueFlush";
 import { sessionUiMessagesToMarkdown } from "./webMarkdown";
@@ -63,6 +64,7 @@ import { WebCommandPalette } from "./WebCommandPalette";
 import { applyFontSizeAttributes } from "../hooks/appearance/fontSizeAttributes";
 import { useWebAppUpdate } from "./useWebAppUpdate";
 import { WebNoticeCenter } from "./WebNoticeCenter";
+import { saveWebImageGenSelection } from "./webImageGen";
 import { useWebImageGen } from "./useWebImageGen";
 import { decideStreamRecovery } from "./webStreamRecovery";
 import { useWebHeaderAutoHide } from "./useWebHeaderAutoHide";
@@ -106,12 +108,16 @@ export function WebChatApp() {
 	// ACP 冷会话要等 runtime 激活（session/load 重放 agent 侧历史）后才拿得到内容。
 	const [historyPhase, setHistoryPhase] = useState<{ sessionId: string; phase: WebHistoryPhase } | null>(null);
 	const [models, setModels] = useState<AvailableModel[]>([]);
+	// 生图 / 生视频模型目录（独立配置文件）：选择器把它们作为分类列出，失败时不显示这两类。
+	const [mediaModels, setMediaModels] = useState<import("../../../main/web/WebMediaModels").WebMediaModels | null>(null);
 	const [modelsRefreshing, setModelsRefreshing] = useState(false);
 	// 模型选择器刷新按钮：绕过缓存重新拉取／api/models?force=1；失败保留旧列表，避免误清空。
 	const refreshModels = async () => {
 		setModelsRefreshing(true);
 		try {
-			setModels(await fetchModels(true));
+			const [nextModels, nextMedia] = await Promise.all([fetchModels(true), fetchMediaModels()]);
+			setModels(nextModels);
+			setMediaModels(nextMedia);
 		} catch {
 			// 刷新失败保留上一次列表，仅结束转圈
 		} finally {
@@ -407,6 +413,12 @@ export function WebChatApp() {
 	const [filePreview, setFilePreview] = useState<WebFilePreviewTarget | null>(null);
 	const previewProjectRef = useRef<{ id: string; root: string } | null>(null);
 	previewProjectRef.current = activeSession ? { id: activeSession.projectId, root: activeSession.projectPath ?? state.projects.find((project) => project.id === activeSession.projectId)?.path ?? "" } : null;
+	// 正文图片/文件链接的解析基准：Web 端没有 runtime cwd，项目根即唯一基准。
+	// 本地绝对路径在浏览器里只能走 /api/file-raw（令牌拼在 query 上），见 webFileRawUrl。
+	const fileLinkBaseDir = activeSession?.projectPath ?? state.projects.find((project) => project.id === activeSession?.projectId)?.path ?? undefined;
+	const fileLinkProjectId = activeSession?.projectId;
+	const toLocalResourceUrl = useCallback((absolutePath: string) => (fileLinkProjectId ? webFileRawUrl(fileLinkProjectId, absolutePath) : absolutePath), [fileLinkProjectId]);
+
 	const openFilePreview = useCallback((path: string, line?: number) => {
 		const project = previewProjectRef.current;
 		if (!project?.root) return;
@@ -536,6 +548,10 @@ export function WebChatApp() {
 		void fetchModels()
 			.then(setModels)
 			.catch(() => setModels([]));
+		// 媒体目录单独拉、单独失败：它挂了不能连语言模型列表一起清空。
+		void fetchMediaModels()
+			.then(setMediaModels)
+			.catch(() => setMediaModels(null));
 	}, []);
 
 	// 状态指纹（2027-02 性能治理）：SSE 断开兜底轮询的快档（流式 1s）里服务端每次
@@ -770,6 +786,21 @@ export function WebChatApp() {
 			// 否则下次激活仍会按旧工具拉起 CLI。
 			await updateSessionRecord(activeSession.id, { backend, acpToolId: nextAcpToolId ?? null, model: null, thinkingLevel: null });
 			await refreshNow();
+		} catch (error) {
+			setCommandError(error instanceof Error ? error.message : String(error));
+		}
+	};
+
+	/**
+	 * 选中生图模型：先按白名单写回生图配置的 activeProviderId/activeModel，
+	 * 再把会话切到 imagegen 后端（Web 端生图是独立后端，不走 pi 的 set_model）。
+	 * 两步都成功才算选中；失败只回显错误，不改后端，避免「模型没换上但后端变了」的半吊子状态。
+	 */
+	const handlePickImageModel = async (providerId: string, modelId: string) => {
+		setCommandError(null);
+		try {
+			await saveWebImageGenSelection({ providerId, modelId });
+			await handleBackendChange("imagegen");
 		} catch (error) {
 			setCommandError(error instanceof Error ? error.message : String(error));
 		}
@@ -1522,36 +1553,40 @@ export function WebChatApp() {
 				{authExpired ? <WebAuthExpiredBanner /> : null}
 				{/* 编辑/重发/删除走 fork 化写入：pi 恒可，DSH 需要活跃 runtime（历史会话没有运行时命令），
 					ACP 一律不给——投影/归档由 agent CLI 主导，运行时没有 fork 命令，摆出入口只会报错。 */}
-				<WebTimeline
-					messages={timelineMessages}
-					hasActiveSession={Boolean(activeSession)}
-					historyPhase={activeHistoryPhase}
-					historyLoadingLabel={activeSession?.backend === "acp" ? t("web.acpHistoryLoading") : t("web.historyLoading")}
-					onRetryHistory={retryActiveHistory}
-					hasMoreHistory={hasMoreHistory}
-					moreCount={moreCount}
-					loadingMore={loadingMore}
-					streaming={combinedStreaming}
-					error={transportError ?? commandError}
-					pendingUiRequest={activePendingUi}
-					uiResponding={uiResponding}
-					onRespondUi={(response) => void handleRespondUi(response)}
-					onLoadMore={() => void handleLoadMore()}
-					onScrollTopChange={handleTimelineScroll}
-					onNearBottomChange={handleNearBottomChange}
-					jumpToLatestNonce={jumpToLatestNonce}
-					canManageMessages={activeSession?.backend === "acp" ? false : activeSession?.backend !== "dsh" || Boolean(activeTarget)}
-					canDeleteMessage={activeSession?.backend === "acp" ? false : Boolean(activeTarget)}
-					pendingMessageAction={pendingMessageAction}
-					exitingMessageIds={exitingMessageIds}
-					flashMessageId={flashMessageId}
-					onEditMessage={(messageId, newText) => void handleEditMessage(messageId, newText)}
-					onDeleteMessage={(messageId) => void handleDeleteMessage(messageId)}
-					onResendMessage={(messageId) => void handleResendMessage(messageId)}
-					onOpenFile={openFilePreview}
-					jumpApiRef={timelineJumpRef}
-					autoExpandProcess={webSettings.settings?.expandInterimDuringStream ?? true}
-				/>
+				{/* 正文图片/文件链接的解析上下文（baseDir + HTTP 字节路由）：Web 里没有 pideck-file:// 协议， */}
+				{/* 不注入这层的话，消息里的 ![](./a.png) 一律加载失败（表现为图片静默消失）。 */}
+				<FileLinkBaseProvider baseDir={fileLinkBaseDir} projectId={fileLinkProjectId} toLocalResourceUrl={toLocalResourceUrl}>
+					<WebTimeline
+						messages={timelineMessages}
+						hasActiveSession={Boolean(activeSession)}
+						historyPhase={activeHistoryPhase}
+						historyLoadingLabel={activeSession?.backend === "acp" ? t("web.acpHistoryLoading") : t("web.historyLoading")}
+						onRetryHistory={retryActiveHistory}
+						hasMoreHistory={hasMoreHistory}
+						moreCount={moreCount}
+						loadingMore={loadingMore}
+						streaming={combinedStreaming}
+						error={transportError ?? commandError}
+						pendingUiRequest={activePendingUi}
+						uiResponding={uiResponding}
+						onRespondUi={(response) => void handleRespondUi(response)}
+						onLoadMore={() => void handleLoadMore()}
+						onScrollTopChange={handleTimelineScroll}
+						onNearBottomChange={handleNearBottomChange}
+						jumpToLatestNonce={jumpToLatestNonce}
+						canManageMessages={activeSession?.backend === "acp" ? false : activeSession?.backend !== "dsh" || Boolean(activeTarget)}
+						canDeleteMessage={activeSession?.backend === "acp" ? false : Boolean(activeTarget)}
+						pendingMessageAction={pendingMessageAction}
+						exitingMessageIds={exitingMessageIds}
+						flashMessageId={flashMessageId}
+						onEditMessage={(messageId, newText) => void handleEditMessage(messageId, newText)}
+						onDeleteMessage={(messageId) => void handleDeleteMessage(messageId)}
+						onResendMessage={(messageId) => void handleResendMessage(messageId)}
+						onOpenFile={openFilePreview}
+						jumpApiRef={timelineJumpRef}
+						autoExpandProcess={webSettings.settings?.expandInterimDuringStream ?? true}
+					/>
+				</FileLinkBaseProvider>
 				<WebSessionStrips sessionId={activeSessionId} />
 				{/* 2026-10 评审 P1：错误/待答原本只出现在时间线列表尾，用户回读历史时完全不可见
 				    （composer 又可能已隐藏）。在 composer 上方放常驻横幅兜底，滚多远都在视口内。 */}
@@ -1564,6 +1599,14 @@ export function WebChatApp() {
 						pendingHidden={Boolean(activePendingUi) && !nearBottom}
 						onJumpToLatest={() => setJumpToLatestNonce((nonce) => nonce + 1)}
 					/>
+				) : null}
+				{/* 生图是单次请求（不进 SSE 流），没有流式消息可看：给一个常驻状态条，
+				    否则用户点发送后几十秒内页面毫无反馈（旧版「生图没反应」的主要观感来源）。 */}
+				{imageGen.generating ? (
+					<div className="flex shrink-0 items-center gap-2 px-4 pb-1 text-caption text-text-tertiary" role="status">
+						<Loader2 className="size-3.5 animate-pideck-spin" aria-hidden="true" />
+						{t("web.imageGenGenerating")}
+					</div>
 				) : null}
 				<WebComposer
 					hasSession={Boolean(activeSessionId)}
@@ -1582,6 +1625,8 @@ export function WebChatApp() {
 					refreshingModels={modelsRefreshing}
 					onRefreshModels={() => void refreshModels()}
 					onModelChange={(model) => void handleModelChange(model)}
+					mediaModels={mediaModels}
+					onPickImageModel={(providerId, modelId) => void handlePickImageModel(providerId, modelId)}
 					thinkingLevel={activeSession?.thinkingLevel ?? pendingThinkingLevel ?? undefined}
 					onThinkingChange={(level) => void handleThinkingChange(level)}
 					onFocusChange={(focused) => {

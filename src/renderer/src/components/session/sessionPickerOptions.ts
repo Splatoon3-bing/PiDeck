@@ -1,6 +1,4 @@
 import type { AvailableModel, ModelListReport } from "../../../../shared/types";
-import type { ImageGenConfigFile } from "../../../../shared/imageGenConfig";
-import type { VideoGenConfigFile } from "../../../../shared/videoGenConfig";
 // 下拉列表排序键与配置页 / 落盘顺序共用 shared 比较器（避免两边秩不一致）。
 import { compareModelRows } from "../../../../shared/modelOrder";
 import { resolveModelDisplayName } from "../../../../shared/modelDisplayName";
@@ -216,10 +214,10 @@ export type MediaModelGroup = {
 	supportsReferenceImage?: boolean;
 };
 
-function uniqModelIds(models: readonly string[]): string[] {
+function uniqModelIds(models: readonly string[] | undefined): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];
-	for (const raw of models) {
+	for (const raw of models ?? []) {
 		const id = typeof raw === "string" ? raw.trim() : "";
 		if (!id || seen.has(id)) continue;
 		seen.add(id);
@@ -228,7 +226,14 @@ function uniqModelIds(models: readonly string[]): string[] {
 	return out;
 }
 
-export function buildImageGenModelGroups(config: Pick<ImageGenConfigFile, "providers"> | undefined): MediaModelGroup[] {
+/**
+ * 入参刻意只要求「id / name / models / referenceMode」这一份结构：
+ * 桌面用完整配置（含凭据），Web 用只读投影（不含凭据），两边共用同一个分组函数，
+ * 而不是各写一套分组规则再慢慢分叉。
+ */
+export type ImageGenModelGroupSource = { providers: ReadonlyArray<{ id: string; name?: string; models?: readonly string[]; referenceMode?: string }> };
+
+export function buildImageGenModelGroups(config: ImageGenModelGroupSource | undefined): MediaModelGroup[] {
 	if (!config) return [];
 	const groups: MediaModelGroup[] = [];
 	for (const provider of config.providers) {
@@ -245,7 +250,9 @@ export function buildImageGenModelGroups(config: Pick<ImageGenConfigFile, "provi
 	return groups;
 }
 
-export function buildVideoGenModelGroups(config: Pick<VideoGenConfigFile, "providers"> | undefined): MediaModelGroup[] {
+export type VideoGenModelGroupSource = { providers: ReadonlyArray<{ id: string; name?: string; models?: readonly string[] }> };
+
+export function buildVideoGenModelGroups(config: VideoGenModelGroupSource | undefined): MediaModelGroup[] {
 	if (!config) return [];
 	const groups: MediaModelGroup[] = [];
 	for (const provider of config.providers) {

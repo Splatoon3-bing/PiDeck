@@ -117,6 +117,12 @@ export type WebServiceDependencies = {
 	deleteProject: (projectId: string) => Promise<boolean>;
 	// force=true 时绕过缓存重新 fork pi --list-models（Web 端模型选择器刷新按钮）。
 	listModels: (force?: boolean) => Promise<AvailableModel[]>;
+	/**
+	 * 生图 / 生视频模型目录（独立 imagegen.json / videogen.json，不在 pi 目录里）。
+	 * 未注入 = Web 端不展示这两类分类；投影只含 id/name/models/referenceMode，
+	 * 凭据永不出主进程（见 WebMediaModels）。
+	 */
+	getMediaModels?: () => Promise<import("./WebMediaModels").WebMediaModels>;
 	listSessions: (projectId: string) => Promise<SessionSummary[]>;
 	listCatalogSessions: (projectId?: string) => Promise<SessionRecord[]>;
 	createSessionDraft: (input: CreateSessionDraftInput) => Promise<SessionRecord>;
@@ -256,6 +262,8 @@ export class WebServiceManager {
 	hostPluginRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 生图路由（T11）；未装配时 /api/imagegen/* 走 404。 */
 	imageGenRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
+	/** 生视频产物出口（只读 blob）；未装配时 /api/videogen/* 走 404。生成链路仍不在 Web 开放。 */
+	videoGenRoutes: { handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> } | null = null;
 	/** 设置页「需要 token 鉴权」开关；true 时所有 /api/*（/api/health 除外）强制令牌。 */
 	private requiresAuth = false;
 	/** 令牌鉴权状态机（实现已迁到 WebTokenAuth）。 */
@@ -545,6 +553,7 @@ export class WebServiceManager {
 			if (this.favoriteRoutes && (await this.favoriteRoutes.handle(url, request, response))) return;
 			if (this.noticeRoutes && (await this.noticeRoutes.handle(url, request, response))) return;
 			if (this.imageGenRoutes && (await this.imageGenRoutes.handle(url, request, response))) return;
+			if (this.videoGenRoutes && (await this.videoGenRoutes.handle(url, request, response))) return;
 			if (this.hostPluginRoutes && (await this.hostPluginRoutes.handle(url, request, response))) return;
 			if (this.workspaceRoutes && (await this.workspaceRoutes.handle(url, request, response))) return;
 			this.sendError(response, 404, "webError.apiNotFound", "API not found");

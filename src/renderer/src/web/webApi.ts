@@ -41,6 +41,16 @@ export function webImageBlobUrl(ref: string): string {
 	return `/api/imagegen/blob/${encodeURIComponent(ref)}${webToken ? `?token=${encodeURIComponent(webToken)}` : ""}`;
 }
 
+/**
+ * 生视频产物地址（与 webImageBlobUrl 同构）。
+ *
+ * 为什么不是 pideck-video://：自定义协议只有 Electron 注册过，浏览器里 `<video>` 打不开；
+ * 视频字节改由主进程的只读路由流式下发（支持 Range，能拖进度），纯回放不触发任何上游调用。
+ */
+export function webVideoBlobUrl(ref: string): string {
+	return `/api/videogen/blob/${encodeURIComponent(ref)}${webToken ? `?token=${encodeURIComponent(webToken)}` : ""}`;
+}
+
 /** 当前令牌（SSE 类连接用：EventSource 无法携带 Authorization header，只能拼 query）。 */
 export function getWebToken(): string | null {
 	return webToken;
@@ -112,6 +122,23 @@ export async function fetchModels(force = false): Promise<AvailableModel[]> {
 	if (!res.ok) throw new Error(`models ${res.status}`);
 	const result = (await res.json()) as { models?: AvailableModel[] };
 	return result.models ?? [];
+}
+
+/**
+ * 生图 / 生视频模型目录（独立配置文件，不在 pi 目录里）。
+ * 主进程只下发 id/name/models/referenceMode，凭据不出主进程；
+ * 失败返回 null 两张表 = 选择器不展示这两类分类（不报错，不阻塞语言模型列表）。
+ */
+export async function fetchMediaModels(): Promise<import("../../../main/web/WebMediaModels").WebMediaModels | null> {
+	try {
+		const res = await apiFetch("/api/media-models");
+		if (!res.ok) return null;
+		const payload = (await res.json()) as Partial<import("../../../main/web/WebMediaModels").WebMediaModels> | null;
+		if (!payload?.imageGen || !payload?.videoGen) return null;
+		return payload as import("../../../main/web/WebMediaModels").WebMediaModels;
+	} catch {
+		return null;
+	}
 }
 
 /** 按项目新建会话（对应桌面端「新建 Agent」入口）。返回新会话 id。 */
@@ -308,6 +335,16 @@ export function chatMessagesToUiMessages(messages: ChatMessage[]): UIMessage[] {
 				}
 				if (image.data.length > 4 * 1024 * 1024) continue;
 				parts.push({ type: "file", mediaType: image.mimeType, data: `data:${image.mimeType};base64,${image.data}` } as unknown as UIMessage["parts"][number]);
+			}
+		}
+		// 生视频历史：消息里只有内容寻址 ref（字节不进程对话 JSONL），浏览器拿不到
+		// pideck-video:// 协议，所以映射成只读 blob 路由的 file part，交给 WebMediaPart 的
+		// <video> 分支播。纯回放，不重建任务、不计费。
+		if (Array.isArray(message.videos)) {
+			for (const video of message.videos) {
+				if (video?.type !== "video" || typeof video.ref !== "string" || !video.ref) continue;
+				const mediaType = typeof video.mimeType === "string" && video.mimeType ? video.mimeType : "video/mp4";
+				parts.push({ type: "file", mediaType, url: webVideoBlobUrl(video.ref) } as unknown as UIMessage["parts"][number]);
 			}
 		}
 		result.push({
@@ -654,6 +691,22 @@ export async function fetchFileContent(projectId: string, path: string, options:
 		throw new WebFileAccessError(payload?.code ?? `file content ${res.status}`, payload?.message ?? `file content ${res.status}`, payload?.reason);
 	}
 	return (await res.json()) as { content?: string; size?: number; tooLarge?: boolean; truncated?: boolean; binary?: boolean };
+}
+
+/**
+ * 媒体字节地址（`<img>`/`<video>`/`<iframe>` 用）。
+ *
+ * 这两类标签只能发普通 GET、带不上 Authorization，所以令牌与 `/api/imagegen/blob`
+ * 同款走 `?token=`（服务端鉴权在 WebTokenAuth 里对 /api/* 统一校验）。
+ * 路径可为项目内相对路径或项目外绝对路径/`~/x`——服务端仍会按安全等级门复核。
+ */
+export function webFileRawUrl(projectId: string, path: string, options: { sessionId?: string; confirmed?: boolean } = {}): string {
+	const params = new URLSearchParams({ projectId, path });
+	if (options.sessionId) params.set("sessionId", options.sessionId);
+	if (options.confirmed) params.set("confirm", "1");
+	const token = getWebToken();
+	if (token) params.set("token", token);
+	return `/api/file-raw?${params.toString()}`;
 }
 
 /** Web 文件写入错误：code=webError.fileChanged 表示磁盘已被外部修改（可 force 覆盖）。 */

@@ -1014,6 +1014,7 @@ export const zhCN = {
 	"app.modelCategoryLanguage": "语言模型",
 	"app.modelCategoryImageGen": "生图模型",
 	"app.modelCategoryVideoGen": "生视频模型",
+	"web.mediaVideoUnsupported": "Web 端暂不支持",
 	"app.modelCategoryMediaLockedHint": "当前会话已开始对话，生图 / 生视频需新建会话",
 	"app.modelCapabilityThinking": "思考 {level}",
 	"app.modelCapabilityThinkingUnsupported": "不支持思考",

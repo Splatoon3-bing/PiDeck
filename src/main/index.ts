@@ -515,6 +515,7 @@ import { VideoSessionStore } from "./videogen/VideoSessionStore";
 import { VideoJobStore } from "./videogen/VideoJobStore";
 import { VideoJobRunner } from "./videogen/VideoJobRunner";
 import { registerVideoGenProtocol } from "./videogen/VideoGenProtocol";
+import { fetchVideoModelCatalog } from "./videogen/videoModelCatalog";
 import type { VideoGenJobSnapshot } from "../shared/types/videogen";
 import { registerVoiceTranscriptionIpc } from "./ipc/voiceTranscriptionIpc";
 import { VoiceTranscriptionConfigStore } from "./voice/VoiceTranscriptionConfigStore";
@@ -557,6 +558,8 @@ import { WebServiceManager } from "./web/WebServiceManager";
 import { installWebHostPluginDeps, registerWebRoutes } from "./web/registerWebRoutes";
 import { webDomainProviders } from "./web/webStoreProviders";
 import { createWebImageGenDeps, getWebImageGenDeps, installWebImageGenDeps } from "./web/WebImageGenRoutes";
+import { toWebMediaModels, type WebMediaModels } from "./web/WebMediaModels";
+import { getWebVideoGenDeps, installWebVideoGenDeps } from "./web/WebVideoGenRoutes";
 import { preparePreloadPath } from "./preloadPath";
 import { AppLogger } from "./logging/AppLogger";
 import { setAppLogger } from "./logging/sharedLogger";
@@ -590,6 +593,13 @@ import { UpdateService } from "./update/UpdateService";
 import type { AppManualUpdateRelease } from "../shared/types/app";
 
 let mainWindow: BrowserWindow | null = null;
+/**
+ * 生图 / 生视频模型目录的 Web 投影（懒装配）。
+ * 两个 config store 在 registerIpc 里创建、Web 服务在 whenReady 里装配，两边不在同一
+ * 作用域，因此用模块级 holder 传递：Web 端模型选择器要按分类列出这两类模型，
+ * 而凭据必须留在主进程（投影见 WebMediaModels）。
+ */
+let webMediaModelsForWeb: (() => Promise<WebMediaModels>) | null = null;
 /** 主窗口实际挂载的会话（当前 + 分屏）：live 流只发这些会话，见 visibleSessionRegistry.ts。 */
 const visibleSessions = new VisibleSessionRegistry();
 /**
@@ -758,6 +768,10 @@ let acpAgentManager: AcpAgentManager;
 const annotateAcpConfigOptions = createAcpModelRateAnnotator();
 /** 生图 blob 存储的延迟引用：imagegen 初始化在另一装配段，ACP 图片物化经此取实例（未初始化时物化退化为保留 data）。 */
 let acpImageBlobStore: ImageBlobStore | null = null;
+/** 生图/生视频会话独立存储的延迟引用：Web 历史读口（readSessionMessages / …MessagePage）在另一装配段，
+ *  与 ACP 图片物化同款按需取实例；未初始化时读口退化为空窗口。 */
+let webImageSessionStore: ImageSessionStore | null = null;
+let webVideoSessionStore: VideoSessionStore | null = null;
 /** 多后端合成网关（pi + dsh + 未来后端）；启动装配后赋值，供发送链路按 agentId 路由。 */
 let compositeAgentGateway: CompositeAgentGateway | undefined;
 let configManager: ConfigManager;
@@ -4210,6 +4224,7 @@ function registerIpc() {
 		getStorePath: () => imageGenRoots.sessions,
 		blobs: imageBlobStore,
 	});
+	webImageSessionStore = imageSessionStore;
 	// pideck-img:// 必须在 app ready 后注册（scheme 特权声明在文件底部 ready 前完成）
 	registerImageGenImageProtocol(imageBlobStore);
 	// pideck-file://：对话内本地图片只读通道。白名单根=项目目录（含 worktree）+ 聊天工作区
@@ -4349,6 +4364,8 @@ function registerIpc() {
 		},
 	});
 	installWebImageGenDeps(createWebImageGenDeps({ config: imageGenConfigStore, service: imageGenService, blobs: imageBlobStore, sessions: imageSessionStore, catalog: () => sessionCatalog }));
+	// Web 模型选择器的媒体分类投影：两个 store 与凭据都在本作用域，投影只出 id/name/models。
+	webMediaModelsForWeb = async () => toWebMediaModels(await imageGenConfigStore.getConfig(), await videoGenConfigStore.getConfig());
 	installWebHostPluginDeps({ catalog: () => hostPlugins.manager.catalog() });
 
 	/**
@@ -4527,10 +4544,13 @@ function registerIpc() {
 	const videoGenRoots = resolveVideoGenStorageRoots();
 	const videoBlobStore = new VideoBlobStore({ getBlobsPath: () => videoGenRoots.blobs });
 	void videoBlobStore.ensureDir();
+	// Web 端历史视频回放：只读 blob 出口（/api/videogen/blob/<ref>）。生成链路仍不在 Web 开放。
+	installWebVideoGenDeps({ resolveBlobPath: (ref) => videoBlobStore.resolvePath(ref) });
 	const videoSessionStore = new VideoSessionStore({
 		getStorePath: () => videoGenRoots.sessions,
 		blobs: videoBlobStore,
 	});
+	webVideoSessionStore = videoSessionStore;
 	const videoJobStore = new VideoJobStore({
 		getJobsPath: () => videoGenRoots.jobs,
 		log: (message, ...args) => appLogger.info("videogen", message, ...args),
@@ -4580,6 +4600,14 @@ function registerIpc() {
 		getConfig: () => videoGenConfigStore.getConfig(),
 		saveConfig: (input) => videoGenConfigStore.saveConfig(input),
 		listJobs: (sessionId) => videoJobRunner.listJobsForSession(sessionId),
+		// 模型能力目录（按模型纠正分辨率/画幅/时长）：凭据只在主进程解析，渲染层只拿能力表。
+		listModels: async (providerId) => {
+			const credentials = await videoGenConfigStore.getCredentials(providerId).catch(() => null);
+			if (!credentials) return { ok: false, error: "notConfigured" };
+			const result = await fetchVideoModelCatalog({ protocol: credentials.protocol, baseUrl: credentials.baseUrl, apiKey: credentials.apiKey });
+			if (!result.ok) return { ok: false, error: result.error };
+			return { ok: true, models: result.models };
+		},
 		log: (message, ...args) => appLogger.info("videogen", message, ...args),
 	});
 	// 重启恢复：24h 窗口内未终态的任务继续轮询（终态立即结清旧任务）
@@ -6521,6 +6549,12 @@ app
 				const snapshot = force ? await piModelCapabilityCache?.refresh() : await piModelCapabilityCache?.ensure();
 				return snapshot?.models ?? (force ? refreshModelList(piLocator, settingsStore, configManager) : fetchModelList(piLocator, settingsStore, configManager));
 			},
+			// 生图 / 生视频模型目录：Web 端模型选择器把它们作为独立分类列出（凭据不离开主进程）。
+			// holder 在 registerIpc 里装配（两个 config store 与 Web 服务不在同一作用域）。
+			getMediaModels: async () =>
+				webMediaModelsForWeb
+					? await webMediaModelsForWeb()
+					: { imageGen: { configured: false, providers: [], activeProviderId: "", activeModel: "" }, videoGen: { configured: false, providers: [], activeProviderId: "", activeModel: "" } },
 			listSessions: async (projectId) => {
 				const project = projectStore.get(projectId);
 				return (await sessionScannerForProject(project)).list(project?.path);
@@ -6660,6 +6694,12 @@ app
 					const messages = await acpAgentManager.readMessagesWithArchive(entry.acpSessionId);
 					return { messages, total: messages.length, windowStart: 0, truncated: false };
 				}
+				// 生图/生视频后端的历史独立存放（ImageSession / VideoSession），没有 pi 会话文件：
+				// 与桌面 IPC sessions:catalog-read 同口径回退到各自的独立存储，否则 Web 侧打开是白页。
+				if (entry?.backend === "imagegen" || entry?.backend === "videogen") {
+					const messages = entry.backend === "videogen" ? ((await webVideoSessionStore?.readMessages(sessionId)) ?? []) : ((await webImageSessionStore?.readMessages(sessionId)) ?? []);
+					return { messages, total: messages.length, windowStart: 0, truncated: false };
+				}
 				if (!entry?.filePath) return { messages: [], total: 0, windowStart: 0, truncated: false };
 				// 有界加载窗口（9 轮 + 条目预算），不是全量历史：全量下发在大会话上会同时顶爆
 				// 主进程与渲染层（#213）。更早历史请走分页接口（Web：/messages/page）。
@@ -6676,6 +6716,12 @@ app
 				// ACP 分页：归档/投影消息按轮次切片（与桌面 IPC sessions:catalog-read-message-page 同源）。
 				if (entry?.backend === "acp" && entry.acpSessionId) {
 					return acpMessagePage(await acpAgentManager.readMessagesWithArchive(entry.acpSessionId), before, pageSize);
+				}
+				// 生图/生视频后端无 pi 会话文件：翻页直接给独立存储的全量（本就按消息 id 折叠、条数极少），
+				// 与桌面 IPC 的 catalog-read-message-page 同口径，避免 Web 端「首屏有、上翻空」。
+				if (entry?.backend === "imagegen" || entry?.backend === "videogen") {
+					const messages = entry.backend === "videogen" ? ((await webVideoSessionStore?.readMessages(sessionId)) ?? []) : ((await webImageSessionStore?.readMessages(sessionId)) ?? []);
+					return { messages, total: messages.length, nextBefore: null };
 				}
 				if (!entry?.filePath) return { messages: [], total: 0, nextBefore: null };
 				return agentManager.readSessionDisplayTurnPage(entry.filePath, sessionId, before, pageSize, undefined, { projectId: entry.projectId });
@@ -6832,6 +6878,7 @@ app
 			onThemeApplied: applyNativeThemeSource,
 			...webDomainProviders({ automation: () => automationStore, runs: () => automationRunCoordinator, agents: () => agentProfileStore, invoke: () => agentInvokeService, favorites: () => favoritesStore, catalog: () => sessionCatalog, notices: () => noticeHistoryStoreRef, announcements: () => announcementService }),
 			imagegen: getWebImageGenDeps,
+			videogen: getWebVideoGenDeps,
 			terminal: {
 				enabled: () => settingsStore.get().webTerminalEnabled === true,
 				requiresAuth: () => settingsStore.get().webServiceRequiresAuth ?? true,

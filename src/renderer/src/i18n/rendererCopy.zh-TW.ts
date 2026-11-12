@@ -2,7 +2,7 @@
  * 本文件由 `node scripts/genZhTwCopy.mjs` 生成，请勿手改。
  * 文案改动请修改对应的 zh-CN 源文件后重新生成；转换规则见该脚本的 OVERRIDES。
  * 注释刻意保留简体：属于开发者视角文本，不面向用户。
- * source-sha256: ed5abaa83e49c01c9fef6d61fc5949802c2fcb3261d974a8103d42e800d29089（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
+ * source-sha256: 441a78fb771b3a10e1f6a2e36a1d0e3733b43340f62b5c4109fb9610b343aa89（来自 src/renderer/src/i18n/rendererCopy.zh-CN.ts 的词典区块指纹，由 tests/zhTwCopy.test.mjs 校验新鲜度）
  */
 import { mainProcessZhTW } from "../../../shared/i18n/mainProcessCopy.zh-TW";
 import type { TranslationKey } from "./rendererCopy.zh-CN";
@@ -1021,6 +1021,7 @@ export const zhTW: Record<TranslationKey, string> = {
 	"app.modelCategoryLanguage": "語言模型",
 	"app.modelCategoryImageGen": "生圖模型",
 	"app.modelCategoryVideoGen": "生影片模型",
+	"web.mediaVideoUnsupported": "Web 端暫不支援",
 	"app.modelCategoryMediaLockedHint": "當前會話已開始對話，生圖 / 生影片需新建會話",
 	"app.modelCapabilityThinking": "思考 {level}",
 	"app.modelCapabilityThinkingUnsupported": "不支援思考",

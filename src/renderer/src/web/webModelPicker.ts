@@ -5,6 +5,8 @@
  * 分组顺序、最近使用去重、能力判定都属产品规则，不写在 JSX 里。
  */
 import type { AvailableModel } from "../../../shared/types";
+// 思考能力口径与桌面端选择器共用一份纯函数，避免两端各写一套判定而漂移。
+import { resolveModelThinkingSupport } from "../components/session/sessionPickerOptions";
 
 export type WebModelKey = string;
 
@@ -17,7 +19,7 @@ export function modelKey(model: Pick<AvailableModel, "provider" | "id">): WebMod
 export const RECENT_MODEL_LIMIT = 5;
 
 export type ModelCapabilityChip = {
-	kind: "reasoning" | "vision";
+	kind: "reasoning" | "vision" | "noThinking";
 	label: string;
 };
 
@@ -38,10 +40,14 @@ export function formatContextWindow(tokens: number | undefined): string | undefi
  * - 视觉：images 列为 true，或 input 模态里含 image。
  * 判定只认后端上报，不按模型名猜测（改名/代理供应商时猜错比不显示更糟）。
  */
-export function modelCapabilityChips(model: AvailableModel, labels: { reasoning: string; vision: string }): ModelCapabilityChip[] {
+export function modelCapabilityChips(model: AvailableModel, labels: { reasoning: string; vision: string; thinking: (level: string) => string; noThinking: string }): ModelCapabilityChip[] {
 	const chips: ModelCapabilityChip[] = [];
-	const reasoning = model.reasoning === true || (model.thinkingLevels?.length ?? 0) > 0;
-	if (reasoning) chips.push({ kind: "reasoning", label: labels.reasoning });
+	// 思考口后以后端上报的能力为准：支持到 high 就只写 high，只接受 off 的模型直接标「不支持」，
+	// 与桌面端选择器同一口径（resolveModelThinkingSupport），避免两端说法不一致。
+	const support = resolveModelThinkingSupport(model);
+	if (support.kind === "supported") chips.push({ kind: "reasoning", label: labels.thinking(support.maxLevel) });
+	else if (support.kind === "unsupported") chips.push({ kind: "noThinking", label: labels.noThinking });
+	else if (model.reasoning === true) chips.push({ kind: "reasoning", label: labels.reasoning });
 	const vision = model.images === true || model.input?.includes("image") === true;
 	if (vision) chips.push({ kind: "vision", label: labels.vision });
 	return chips;

@@ -152,6 +152,17 @@ export class WebApiRoutes {
 			this.sendJson(response, { models: await this.deps.listModels(force) });
 			return true;
 		}
+		// 生图 / 生视频模型目录（独立 imagegen.json / videogen.json，不在 pi 目录里）：
+		// 只下发 id/name/models/referenceMode，凭据永不出主进程（见 WebMediaModels）。
+		if (url.pathname === "/api/media-models" && request.method === "GET") {
+			const load = this.deps.getMediaModels;
+			if (!load) {
+				this.sendJson(response, { imageGen: null, videoGen: null });
+				return true;
+			}
+			this.sendJson(response, await load());
+			return true;
+		}
 		if (url.pathname === "/api/projects" && request.method === "POST") {
 			const body = await this.readJson<{ path?: string }>(request);
 			const path = body.path?.trim() ?? "";

@@ -50,17 +50,24 @@ test("上下文窗口紧凑写法", () => {
 	assert.equal(formatContextWindow(Number.NaN), undefined);
 });
 
-test("能力徽标只认后端上报：reasoning / thinkingLevels / images / input 模态", () => {
-	const labels = { reasoning: "推理", vision: "视觉" };
+// 沙箱与宿主原型不同，deepStrictEqual 会误报，统一走 JSON 比较。
+const asJson = (value) => JSON.stringify(value);
+
+test("能力徽标只认后端上报：思考最高档 / 不支持思考 / 视觉", () => {
+	const labels = { reasoning: "推理", vision: "视觉", thinking: (level) => `思考 ${level}`, noThinking: "不支持思考" };
 	const kinds = (input) => plain(modelCapabilityChips(input, labels)).map((chip) => chip.kind);
-	assert.deepEqual(kinds(model()), [], "没有任何能力声明时不加徽标（不按名字猜）");
-	assert.deepEqual(kinds(model({ reasoning: true })), ["reasoning"]);
-	assert.deepEqual(kinds(model({ thinkingLevels: ["low", "high"] })), ["reasoning"], "探针给出可用档位也算推理模型");
-	assert.deepEqual(kinds(model({ thinkingLevels: [] })), [], "空数组是权威空结果，不算推理");
-	assert.deepEqual(kinds(model({ images: true })), ["vision"]);
-	assert.deepEqual(kinds(model({ input: ["text", "image"] })), ["vision"]);
-	assert.deepEqual(kinds(model({ reasoning: true, images: true })), ["reasoning", "vision"], "两个徽标顺序固定：推理在前");
-	assert.deepEqual(plain(modelCapabilityChips(model({ reasoning: true }), labels))[0].label, "推理", "文案由调用方注入，模块不带文案");
+	const labelsOf = (input) => plain(modelCapabilityChips(input, labels)).map((chip) => chip.label);
+	assert.equal(asJson(kinds(model())), "[]", "没有任何能力声明时不加徽标（不按名字猜）");
+	assert.equal(asJson(kinds(model({ reasoning: true }))), asJson(["reasoning"]));
+	// 档位是权威能力：写出最高档，而不是含糊的「推理」
+	assert.equal(asJson(labelsOf(model({ thinkingLevels: ["off", "low", "high"] }))), asJson(["思考 high"]));
+	assert.equal(asJson(labelsOf(model({ thinkingLevels: ["off", "minimal", "max"] }))), asJson(["思考 max"]));
+	// 后端明确只接受 off = 不支持思考（不是「推理」也不是空徽标）
+	assert.equal(asJson(labelsOf(model({ thinkingLevels: ["off"] }))), asJson(["不支持思考"]));
+	assert.equal(asJson(labelsOf(model({ thinkingLevels: [] }))), asJson(["不支持思考"]));
+	assert.equal(asJson(kinds(model({ images: true }))), asJson(["vision"]));
+	assert.equal(asJson(kinds(model({ input: ["text", "image"] }))), asJson(["vision"]));
+	assert.equal(asJson(kinds(model({ thinkingLevels: ["high"], images: true }))), asJson(["reasoning", "vision"]), "两个徽标顺序固定：思考在前");
 });
 
 test("分组顺序：最近使用置顶，当前模型强制在首位，其后是各供应商", () => {

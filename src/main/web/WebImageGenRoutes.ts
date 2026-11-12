@@ -38,6 +38,8 @@ export function toWebImageGenConfig(config: ImageGenConfigFile): WebImageGenConf
 
 export type WebImageGenRoutesDeps = {
 	getConfig: () => Promise<ImageGenConfigFile>;
+	/** 只写 activeProviderId / activeModel（Web 选择器只换模型，不碰凭据与字段开关）。 */
+	saveConfig?: (config: ImageGenConfigFile) => Promise<{ ok: true; config: ImageGenConfigFile } | { ok: false; error: string }>;
 	generate: (request: ImageGenRequest) => Promise<ImageGenResult>;
 	putBlob: (data: string, mimeType: string) => Promise<string | null>;
 	readBlob: (ref: string) => Promise<ImageBlobPayload | null>;
@@ -68,12 +70,13 @@ export class WebImageGenRoutes {
 	constructor(private readonly deps: WebImageGenRoutesDeps) {}
 
 	async handle(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> {
-		if (url.pathname !== "/api/imagegen/config" && url.pathname !== "/api/imagegen/generate" && !url.pathname.startsWith(BLOB_PREFIX)) return false;
+		if (url.pathname !== "/api/imagegen/config" && url.pathname !== "/api/imagegen/generate" && url.pathname !== "/api/imagegen/selection" && !url.pathname.startsWith(BLOB_PREFIX)) return false;
 		try {
 			if (url.pathname === "/api/imagegen/config" && request.method === "GET") {
 				json(response, 200, toWebImageGenConfig(await this.deps.getConfig()));
 				return true;
 			}
+			if (url.pathname === "/api/imagegen/selection" && request.method === "POST") return await this.select(request, response);
 			if (url.pathname.startsWith(BLOB_PREFIX) && request.method === "GET") return await this.blob(url, response);
 			if (url.pathname !== "/api/imagegen/generate" || request.method !== "POST") {
 				fail(response, 405, "webError.methodNotAllowed");
@@ -90,6 +93,26 @@ export class WebImageGenRoutes {
 			else fail(response, 400, "webError.imageGenFailed");
 			return true;
 		}
+	}
+
+	private async select(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		const body = record(await readJson(request, 8 * 1024));
+		for (const key of Object.keys(body)) if (key !== "providerId" && key !== "modelId") throw invalid(`unknown field: ${key}`, key);
+		const providerId = typeof body.providerId === "string" ? body.providerId.trim() : "";
+		const modelId = typeof body.modelId === "string" ? body.modelId.trim() : "";
+		if (!providerId || providerId.length > MAX_REF_CHARS) throw invalid("providerId is invalid", "providerId");
+		if (!modelId || modelId.length > MAX_REF_CHARS) throw invalid("modelId is invalid", "modelId");
+		const save = this.deps.saveConfig;
+		if (!save) throw Object.assign(new Error("selection is not writable"), { name: "WebImageGenNotConfiguredError" });
+		const config = await this.deps.getConfig();
+		const provider = config.providers.find((item) => item.id === providerId);
+		// 白名单：只能选配置里真实存在且属于该供应商的模型，不接受任意字符串写入配置文件。
+		if (!provider || !provider.models.includes(modelId)) throw invalid("model is not available for this provider", "modelId");
+		const next: ImageGenConfigFile = { ...config, activeProviderId: provider.id, activeModel: modelId };
+		const result = await save(next);
+		if (!result.ok) throw Object.assign(new Error(result.error), { name: "WebImageGenNotConfiguredError" });
+		json(response, 200, { ok: true, activeProviderId: provider.id, activeModel: modelId });
+		return true;
 	}
 
 	private async generate(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
@@ -246,7 +269,7 @@ export function getWebImageGenDeps(): WebImageGenRoutesDeps | null {
 }
 
 export function createWebImageGenDeps(deps: {
-	config: { getConfig: () => Promise<ImageGenConfigFile> };
+	config: { getConfig: () => Promise<ImageGenConfigFile>; saveConfig?: (config: ImageGenConfigFile) => Promise<{ ok: true; config: ImageGenConfigFile } | { ok: false; error: string }> };
 	service: { generate: (request: ImageGenRequest) => Promise<ImageGenResult> };
 	blobs: { put: (data: string, mimeType: string) => Promise<string | null>; readPayload: (ref: string) => Promise<ImageBlobPayload | null> };
 	sessions: { append: (sessionId: string, messages: ChatMessage[]) => Promise<void> };
@@ -254,6 +277,7 @@ export function createWebImageGenDeps(deps: {
 }): WebImageGenRoutesDeps {
 	return {
 		getConfig: () => deps.config.getConfig(),
+		saveConfig: deps.config.saveConfig ? (config) => deps.config.saveConfig!(config) : undefined,
 		generate: (request) => deps.service.generate(request),
 		putBlob: (data, mimeType) => deps.blobs.put(data, mimeType),
 		readBlob: (ref) => deps.blobs.readPayload(ref),
