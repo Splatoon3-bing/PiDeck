@@ -1,3 +1,26 @@
+## v0.12.0 (2026-11-12)
+
+This release turns model picking from "a wall of identical grey labels" into a catalogue you can actually read: both the desktop and web model pickers now group models by type (language / image / video), and thinking levels follow each model's real capability. It also lands the web-side read-only image/video path and per-model video parameter correction.
+
+### 🚀 New Features
+- **Categorised model picker** — Language / image / video models are listed as separate categories, each grouped by provider; image rows are tagged "text to image" and video rows "text to video", and "reference image" is shown at provider level (it is a provider-level declaration: within one gateway only the `-edit` model can actually edit, so it is not claimed per row).
+- **Picking a media model switches mode** — Choosing an image/video model from the same picker writes the selection to its own config and switches to the matching mode; sessions that already have messages show these rows read-only with a hint to start a new session (image/video are separate backends and cannot be switched mid-conversation).
+- **Web picker parity** — The web sheet now has the same three categories plus thinking/vision chips; video stays read-only on web and is labelled "Not available on web".
+- **Web video playback for history** — New read-only `/api/videogen/blob` with single-range support so seeking works; historical videos are no longer blank on web.
+- **Per-model video parameters** — A model capability catalogue corrects resolution / aspect ratio / duration per model when switching (kling accepts 720P/1080P/4K, minimax 768P/2K; wrong values fail upstream).
+
+### ✨ Improvements
+- **Unique model identity in rows** — Rows are now two-line: display name plus `provider · id`. models.json allows two models to share one name (`cn:hy4free` and `cn:hy4std` are both "Hy4"); with the old single-line label both rows looked identical and the id only lived in a tooltip, so users concluded their model was missing.
+- **Thinking levels match capability** — When the backend only accepts `off` (or `--list-models` reports thinking = no), the composer's thinking control shows "No thinking" and is inert instead of offering a one-notch slider; model rows gained capability chips (`thinking high` / `thinking max` / `no thinking` / `vision`) and stay silent when capability is unknown.
+- **Web raw file preview and clipboard** — `/api/file-raw` wired for previews; a clipboard shim restores copy buttons for code blocks and tables on insecure LAN http.
+- **Session todo freshness** — Fixed todo parsing and refresh ordering so completed/in-progress markers no longer stick to a stale snapshot.
+
+### 🐛 Fixes
+- **`/api/imagegen/*` permanently 404** — Routes are now registered lazily, fixing image generation being unavailable on web due to startup ordering.
+- **Blank image/video sessions on web** — Their history lives outside pi session files; web readers now fall back to the dedicated stores.
+- **Half-broken composer on the start page after picking a media model** — The guide page only stored the backend choice locally and mode derivation did not follow, hiding the LLM chip without showing the media parameter bar; the guide page's media backend is now the source of truth for mode.
+- **Leftover empty group headers when a search matches nothing** — Custom group headers now hide along with the cmdk group, leaving only "no matching models".
+
 ## v0.11.0 (2026-11-08)
 
 This release brings the PiDeck Web front from a chat-only surface to a full workbench: terminal, automation, agents, favorites, notices, host plugins, PWA/offline all land, with mobile and iPad physical-keyboard support polished; on the engineering side, the full test suite goes from 156 red to 0, with session path identity, ACP shutdown semantics, and cross-platform path handling fixed.

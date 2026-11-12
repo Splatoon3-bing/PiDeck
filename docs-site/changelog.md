@@ -10,6 +10,20 @@ description: PiDeck 每个版本的发布记录：新功能、问题修复与体
 - [中文 CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md)
 - [English CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.md)
 
+## v0.12.0
+
+发布时间：2026-11-12
+
+- 🚀 **模型选择器分类**
+- 🚀 **选中媒体模型即切模式**
+- 🚀 **Web 端模型选择器同步分类**
+- 🚀 **Web 生视频历史回放**
+- 🚀 **生视频参数按模型能力纠正**
+- ✨ **模型行显示唯一身份**
+- ✨ **思考档位与模型能力一致**
+- ✨ **Web 文件原文件读取与剪贴板**
+- ✨ **会话 todo 状态新鲜度**
+
 ## v0.11.0
 
 发布时间：2026-11-08

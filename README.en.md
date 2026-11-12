@@ -11,7 +11,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.11.0-blue)
+![Version](https://img.shields.io/badge/version-0.12.0-blue)
 
 <!-- star-history:start -->
 <picture>
@@ -82,18 +82,18 @@
 
 ## 📋 Changelog
 
-> **Latest: v0.11.0** (2026-11-08)
+> **Latest: v0.12.0** (2026-11-12)
 
-### v0.11.0 Release Highlights
-- 🚀 **Web Terminal (off by default)**
-- 🚀 **Web workbench fully aligned**
-- 🚀 **Web host plugins read-only entry**
-- 🚀 **Web PWA/offline**
-- 🚀 **Web settings panel**
-- ✨ **iPad + Magic Keyboard Enter to send**
-- ✨ **Session path identity normalization**
-- ✨ **ACP graceful shutdown**
-- ✨ **Cross-platform path semantics**
+### v0.12.0 Release Highlights
+- 🚀 **Categorised model picker**
+- 🚀 **Picking a media model switches mode**
+- 🚀 **Web picker parity**
+- 🚀 **Web video playback for history**
+- 🚀 **Per-model video parameters**
+- ✨ **Unique model identity in rows**
+- ✨ **Thinking levels match capability**
+- ✨ **Web raw file preview and clipboard**
+- ✨ **Session todo freshness**
 
 [View Full Changelog →](CHANGELOG.md)
 

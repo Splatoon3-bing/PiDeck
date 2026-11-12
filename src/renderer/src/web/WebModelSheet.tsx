@@ -98,10 +98,7 @@ function MediaRow(props: { row: Extract<ModelSheetRow, { kind: "media" }>; onSel
 			data-testid="web-media-model-row"
 			data-selectable={props.row.selectable ? "true" : undefined}
 			aria-disabled={props.row.selectable ? undefined : true}
-			className={cn(
-				"group relative flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors pointer-coarse:min-h-14",
-				props.row.selectable ? "hover:bg-muted/60 focus-visible:bg-muted/60" : "cursor-default opacity-60",
-			)}
+			className={cn("group relative flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors pointer-coarse:min-h-14", props.row.selectable ? "hover:bg-muted/60 focus-visible:bg-muted/60" : "cursor-default opacity-60")}
 			onClick={props.onSelect}
 		>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -285,7 +282,17 @@ export function WebModelSelector(props: {
 						);
 					}
 					if (row.kind === "media") {
-						return <MediaRow key={row.key} row={row} onSelect={() => { if (!row.selectable) return; props.onPickImageModel?.(row.providerId, row.modelId); setOpen(false); }} />;
+						return (
+							<MediaRow
+								key={row.key}
+								row={row}
+								onSelect={() => {
+									if (!row.selectable) return;
+									props.onPickImageModel?.(row.providerId, row.modelId);
+									setOpen(false);
+								}}
+							/>
+						);
 					}
 					return <ModelRow key={row.key} item={row.item} active={modelKey(row.item) === currentKey} onSelect={() => select(row.item)} />;
 				})}

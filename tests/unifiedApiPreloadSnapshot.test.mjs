@@ -39,6 +39,8 @@
  * 2026-11-04 刷新：WSL 目录浏览（Wave 0，提交 0f91282e4）把 projects.addWsl 换成
  *   listWslDirectory + addWslPath（净 +1 方法）；命名空间数 82 与 sessions 117 / config 53 /
  *   git 64 / app 32 钓点均不变，仅方法清单摘要变化。
+ * 2026-11-12 刷新：videogen.listModels（按供应商拉取上游视频模型能力目录，用于按模型纠正
+ *   分辨率/画幅/时长）+1 方法；命名空间数 82 与各数量锚点均不变，仅方法清单摘要变化。
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -46,7 +48,7 @@ import { test } from "node:test";
 import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
 
 const NS_LIST_SHA256 = "ecf92dceedeea2d9b21c5625e42f3f30786c264a01fba4cb738834630948efee";
-const FULL_METHODS_SHA256 = "8d5e92b1c0f3e86355b6a84048a094514712cf0f565ce8025a661cd9a35ac877";
+const FULL_METHODS_SHA256 = "55df05969cfbb9444de146decc30f3c4abcceb4c731377d47a5e150bf22b3e68";
 const NAMESPACE_COUNT = 82;
 
 /** 捕获 preload 暴露的 piDesktop；null/undefined/形态不符时显式红并给诊断（F8-6 共用）。 */

@@ -174,6 +174,8 @@ function MediaPreviewBody(props: { projectId: string; path: string; kind: MediaK
 			</div>
 		);
 	}
+	// scroll-ok: bounded —— 媒体预览视口只有一个 <img>/<video>/<audio>，内容不随数据增长，
+	// 溢出时整体滚动（图片放大查看），没有行高/虚拟化意义。
 	return (
 		<div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-bg-app p-2">
 			{props.kind === "image" ? (

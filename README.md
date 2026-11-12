@@ -11,7 +11,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.11.0-blue)
+![Version](https://img.shields.io/badge/version-0.12.0-blue)
 
 国内 AtomGit 托管：https://atomgit.com/ayuayue/PiDeck
 <!-- 预留 AtomGit G-Star 徽章位（替换占位链接后启用）
@@ -102,18 +102,18 @@
 
 ## 📋 更新日志
 
-> **最新版本 v0.11.0**（2026-11-08）
+> **最新版本 v0.12.0**（2026-11-12）
 
-### v0.11.0 更新亮点
-- 🚀 **Web 终端（默认关闭）**
-- 🚀 **Web 工作台全量补齐**
-- 🚀 **Web 宿主插件只读入口**
-- 🚀 **Web PWA/离线**
-- 🚀 **Web 设置面板**
-- ✨ **iPad+妙控键盘 Enter 发送**
-- ✨ **会话路径身份归一**
-- ✨ **ACP 有序停止**
-- ✨ **跨平台路径语义**
+### v0.12.0 更新亮点
+- 🚀 **模型选择器分类**
+- 🚀 **选中媒体模型即切模式**
+- 🚀 **Web 端模型选择器同步分类**
+- 🚀 **Web 生视频历史回放**
+- 🚀 **生视频参数按模型能力纠正**
+- ✨ **模型行显示唯一身份**
+- ✨ **思考档位与模型能力一致**
+- ✨ **Web 文件原文件读取与剪贴板**
+- ✨ **会话 todo 状态新鲜度**
 
 [查看完整更新日志 →](CHANGELOG.zh-CN.md)
 

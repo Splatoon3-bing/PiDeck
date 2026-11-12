@@ -52,10 +52,7 @@ test("投影保留选择器需要的字段：模型去重、referenceMode 缺省
 	assert.equal(projected.imageGen.configured, true);
 	assert.equal(projected.videoGen.configured, true);
 
-	const missingReferenceMode = toWebMediaModels(
-		{ providers: [{ id: "p", name: "P", models: ["m"], baseUrl: "", apiKey: "" }], activeProviderId: "", activeModel: "" },
-		{ providers: [], activeProviderId: "", activeModel: "", activeParams: {}, costConfirm: true },
-	);
+	const missingReferenceMode = toWebMediaModels({ providers: [{ id: "p", name: "P", models: ["m"], baseUrl: "", apiKey: "" }], activeProviderId: "", activeModel: "" }, { providers: [], activeProviderId: "", activeModel: "", activeParams: {}, costConfirm: true });
 	assert.equal(missingReferenceMode.imageGen.providers[0].referenceMode, "none", "旧配置无 referenceMode 时按不支持参考图理解");
 });
 

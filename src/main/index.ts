@@ -6551,10 +6551,7 @@ app
 			},
 			// 生图 / 生视频模型目录：Web 端模型选择器把它们作为独立分类列出（凭据不离开主进程）。
 			// holder 在 registerIpc 里装配（两个 config store 与 Web 服务不在同一作用域）。
-			getMediaModels: async () =>
-				webMediaModelsForWeb
-					? await webMediaModelsForWeb()
-					: { imageGen: { configured: false, providers: [], activeProviderId: "", activeModel: "" }, videoGen: { configured: false, providers: [], activeProviderId: "", activeModel: "" } },
+			getMediaModels: async () => (webMediaModelsForWeb ? await webMediaModelsForWeb() : { imageGen: { configured: false, providers: [], activeProviderId: "", activeModel: "" }, videoGen: { configured: false, providers: [], activeProviderId: "", activeModel: "" } }),
 			listSessions: async (projectId) => {
 				const project = projectStore.get(projectId);
 				return (await sessionScannerForProject(project)).list(project?.path);
