@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
+import { localImageUrl } from "../../../../shared/localImage";
 import type { ProjectFileAccessScope } from "../../../../shared/types";
 import { getFilePathVerdict, requestFilePathVerdicts, subscribeFilePathVerdicts } from "../../utils/filePathVerdictStore";
 import { resolveFileLinkPath } from "../../utils/filePathLinks";
@@ -11,6 +12,14 @@ type FileLinkBase = {
 	scope?: ProjectFileAccessScope;
 	/** 会话身份：右键菜单里的系统动作要与左键点击走同一道安全等级门（会话级覆盖优先于全局默认） */
 	sessionId?: string;
+	/**
+	 * 绝对路径 → 可加载 URL 的宿主实现（缺省为桌面端的 `pideck-file://` 只读协议）。
+	 *
+	 * Web 服务跑在浏览器里，自定义协议不存在，只能走 HTTP 字节路由
+	 *（`/api/file-raw`，令牌拼在 query 上）；否则正文里的本地图片 `/api/file-raw`
+	 * 加载不出来，表现为「图片静默消失」。
+	 */
+	toLocalResourceUrl?: (absolutePath: string) => string;
 };
 
 /**
@@ -21,21 +30,30 @@ type FileLinkBase = {
  */
 const FileLinkBaseContext = createContext<FileLinkBase>({});
 
-export function FileLinkBaseProvider(props: { baseDir: string | undefined; projectRoot?: string; projectId?: string; sessionId?: string; children: ReactNode }) {
+export function FileLinkBaseProvider(props: { baseDir: string | undefined; projectRoot?: string; projectId?: string; sessionId?: string; toLocalResourceUrl?: (absolutePath: string) => string; children: ReactNode }) {
 	const value = useMemo<FileLinkBase>(
 		() => ({
 			baseDir: props.baseDir,
 			projectRoot: props.projectRoot,
 			scope: props.projectId ? { projectId: props.projectId } : undefined,
 			sessionId: props.sessionId,
+			toLocalResourceUrl: props.toLocalResourceUrl,
 		}),
-		[props.baseDir, props.projectId, props.projectRoot, props.sessionId],
+		[props.baseDir, props.projectId, props.projectRoot, props.sessionId, props.toLocalResourceUrl],
 	);
 	return <FileLinkBaseContext.Provider value={value}>{props.children}</FileLinkBaseContext.Provider>;
 }
 
 export function useFileLinkBaseDir(): string | undefined {
 	return useContext(FileLinkBaseContext).baseDir;
+}
+
+/**
+ * 本地绝对路径 → 可加载 URL 的解析器（Markdown 图片共用）。
+ * 缺省是桌面端 `pideck-file://` 协议；Web 由 Provider 注入 `/api/file-raw`。
+ */
+export function useLocalResourceUrl(): (absolutePath: string) => string {
+	return useContext(FileLinkBaseContext).toLocalResourceUrl ?? localImageUrl;
 }
 
 /**

@@ -2038,6 +2038,8 @@ export function createPreviewApi(): PiDesktopApi {
 			getConfig: async () => ({ ...EMPTY_VIDEO_GEN_CONFIG, providers: [] }),
 			saveConfig: async (config) => ({ ok: true, config }),
 			listJobs: async () => [],
+			// 预览态没有主进程凭据：能力目录一律不可用（composer 退回协议族预设，不纠正参数）
+			listModels: async () => ({ ok: false, error: "unsupported" }),
 			onEvent: () => () => {},
 		},
 		enhance: {

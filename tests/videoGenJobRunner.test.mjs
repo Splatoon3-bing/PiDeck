@@ -226,3 +226,45 @@ test("resume：未终态任务恢复轮询；超过 24h 的按超时结清", asy
 	const freshEvent = emitted.filter((event) => event.jobId === "j-fresh").at(-1);
 	assert.equal(freshEvent.status, "succeeded");
 });
+
+test("openai-videos：取片打 /v1/videos/{id}/content 并带 Bearer（响应里不给产物 URL）", async () => {
+	const calls = [];
+	const runner = new VideoJobRunner({
+		loadJobs: async () => [],
+		saveJobs: async () => undefined,
+		getCredentials: async () => ({ baseUrl: "https://gw.example.com", apiKey: "sk-live", protocol: "openai-videos", name: "WB" }),
+		putVideo: async () => "b".repeat(64) + ".mp4",
+		persistMessages: async () => undefined,
+		emit: () => undefined,
+		log: () => undefined,
+		fetchImpl: async (url, init) => {
+			calls.push({ url, headers: init?.headers, method: init?.method, body: init?.body });
+			if (url.endsWith("/v1/videos") && init?.method === "POST") return jsonResponse({ id: "v-1", status: "queued" });
+			if (url.endsWith("/v1/videos/v-1")) return jsonResponse({ id: "v-1", status: "completed", progress: 100 });
+			// /v1/videos/v-1/content：鉴权缺失会被网关 401，这里断言必须带令牌
+			return init?.headers?.Authorization === "Bearer sk-live" ? jsonResponse({ ok: true }) : jsonResponse({ error: { message: "unauthorized" } }, 401);
+		},
+		now: () => 1_000_000,
+		sleep: async () => undefined,
+		setTimer: (callback) => {
+			timerQueue.push(callback);
+			return { _fake: true };
+		},
+		clearTimer: () => undefined,
+	});
+	const timerQueue = [];
+	const submitted = await runner.submit({ sessionId: "s1", messageId: "m-1", provider: "vg-wb", model: "minimax-h3", prompt: "p", duration: "5", ratio: "16:9" });
+	assert.equal(submitted.ok, true);
+	// 提交体是 OpenAI 形态（prompt/seconds/aspect_ratio，没有 content 数组）
+	const submitBody = JSON.parse(calls[0].body ?? "{}");
+	assert.equal(calls[0].url, "https://gw.example.com/v1/videos");
+	assert.equal(submitBody.seconds, 5);
+	assert.equal(submitBody.aspect_ratio, "16:9");
+	assert.equal("content" in submitBody, false);
+	// 一轮轮询 → completed → 取片（带 Bearer）
+	await timerQueue.shift()();
+	await new Promise((resolve) => setImmediate(resolve));
+	const contentCall = calls.find((call) => call.url.endsWith("/content"));
+	assert.ok(contentCall, "完成后必须去打 content 端点取片");
+	assert.equal(contentCall.headers.Authorization, "Bearer sk-live");
+});

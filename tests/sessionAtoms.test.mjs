@@ -460,6 +460,41 @@ test("runtime binding event advances an activating send state to sending (ACP fi
 	assert.equal(store.get(atoms.sessionSendStateBySessionIdAtomFamily("session-c")).status, "idle");
 });
 
+test("setWidget 帧缺 requestId 时仍落到 widgets（任务状态不停在旧帧）", () => {
+	const atoms = loadAtoms();
+	const store = createStore();
+	const bind = () =>
+		store.set(atoms.applySessionRuntimeEventAtom, {
+			sessionId: "session-w",
+			agentId: "agent-w",
+			runtimeGeneration: 1,
+			sourceChannel: "agents:state",
+			payload: { id: "agent-w", status: "running" },
+		});
+	const setWidget = (payload) =>
+		store.set(atoms.applySessionRuntimeEventAtom, {
+			sessionId: "session-w",
+			agentId: "agent-w",
+			runtimeGeneration: 1,
+			sourceChannel: "agents:ui-request",
+			payload: { agentId: "agent-w", method: "setWidget", ...payload },
+		});
+	const widgetLines = () => store.get(atoms.sessionRuntimeUiByIdAtom)["session-w"]?.widgets?.["pi-deck-todo"];
+	bind();
+	// 主进程透传的 requestId 由 pi 帧的 id 决定；缺 id 时为空串。旧实现据此整帧丢弃，
+	// widgetLines 永远停在上一帧 —— 于是「任务已完成但列表没更新」。
+	setWidget({ requestId: "", widgetKey: "pi-deck-todo", widgetLines: ["☐ #1 补测试"] });
+	assert.deepEqual([...(widgetLines() ?? [])], ["☐ #1 补测试"]);
+	setWidget({ requestId: "", widgetKey: "pi-deck-todo", widgetLines: ["☑ #1 补测试"] });
+	assert.deepEqual([...(widgetLines() ?? [])], ["☑ #1 补测试"]);
+	// 清空帧（无 widgetLines）仍然删除该 widget
+	setWidget({ requestId: "", widgetKey: "pi-deck-todo" });
+	assert.equal(widgetLines(), undefined);
+	// 带 requestId 的常规帧行为不变
+	setWidget({ requestId: "req-9", widgetKey: "pi-deck-todo", widgetLines: ["☑ #2 发版"] });
+	assert.deepEqual([...(widgetLines() ?? [])], ["☑ #2 发版"]);
+});
+
 test("routes runtime payloads into session-keyed messages and state", () => {
 	const atoms = loadAtoms();
 	const store = createStore();

@@ -7,14 +7,22 @@
  * protocol 分发；baseUrl 是网关根（如 https://example.com），路径由适配器拼接。
  */
 
-/** 协议族：已验证可用的两类（TokenDance 聚合网关方言）。 */
-export const VIDEO_GEN_PROTOCOLS = ["minimax-v2", "seedance-ark"] as const;
+/**
+ * 协议族：
+ * - minimax-v2 / seedance-ark：TokenDance 聚合网关方言（原有两个）；
+ * - openai-videos：OpenAI 风格 `/v1/videos` 三段式（POST 建任务 → GET {id} 查状态 →
+ *   GET {id}/content 取片，Bearer 鉴权）。自建/第三方网关普遍按这个形态实现
+ *   （如 wb2api 的 internal/server/video.go），因此单独成族而不是塞进上面两个。
+ */
+export const VIDEO_GEN_PROTOCOLS = ["minimax-v2", "seedance-ark", "openai-videos"] as const;
 export type VideoGenProtocolFamily = (typeof VIDEO_GEN_PROTOCOLS)[number];
 
 /** 协议族展示名（设置页/选择器用）。 */
 export const VIDEO_GEN_PROTOCOL_LABELS: Record<VideoGenProtocolFamily, string> = {
 	"minimax-v2": "MiniMax 视频协议 v2",
 	"seedance-ark": "字节 Seedance（Ark）",
+	// 纯 ASCII：这条标签在四份词典之外（shared 常量），不随语言切换
+	"openai-videos": "OpenAI Videos (/v1/videos)",
 };
 
 /**
@@ -26,12 +34,17 @@ export const VIDEO_GEN_RESOLUTION_PRESETS: Record<VideoGenProtocolFamily, string
 	"minimax-v2": ["480P", "768P", "1080P"],
 	// Ark 用小写 p（文档 720p/1080p）
 	"seedance-ark": ["480p", "720p", "1080p"],
+	// OpenAI 风格网关把分辨率透传给上游模型，各有各的枚举（wb2api 实测：
+	// kling-video-v3 = 720P/1080P/4K，minimax-video-h3 = 768P/2K）。预设取并集，
+	// 真正支持哪些以 GET /v1/videos/models 的 video_generation.resolutions 为准。
+	"openai-videos": ["720P", "768P", "1080P", "2K", "4K"],
 };
 
 export const VIDEO_GEN_RATIO_PRESETS: Record<VideoGenProtocolFamily, string[]> = {
 	// 文生视频 ratio 不能为 adaptive（MiniMax 约束）
 	"minimax-v2": ["16:9", "9:16", "4:3", "3:4", "1:1"],
 	"seedance-ark": ["16:9", "9:16", "4:3", "3:4", "1:1", "adaptive"],
+	"openai-videos": ["16:9", "9:16", "4:3", "3:4", "1:1", "adaptive"],
 };
 
 export const VIDEO_GEN_DURATION_PRESETS: readonly string[] = ["5", "10"];

@@ -17,9 +17,11 @@ import { Loader2, Pencil, X } from "lucide-react";
 /** 超过这个行数才虚拟化：短文件直接全量渲染，省掉测量与绝对定位开销。 */
 const VIRTUALIZE_MIN_LINES = 40;
 import { MarkdownStream } from "@/components/session/MarkdownStream";
+import { FileLinkBaseProvider } from "@/components/session/FileLinkBase";
+import { mediaKindOfPath, type MediaKind } from "../../../shared/mediaMime";
 import { VirtualStack } from "@/components/ui-shadcn/virtual-stack";
 import { t, type TranslationKey } from "@/i18n";
-import { fetchFileContent, fetchGitDiff, fetchGitStatus } from "./webApi";
+import { fetchFileContent, fetchGitDiff, fetchGitStatus, webFileRawUrl } from "./webApi";
 import { WebFileEditor } from "./WebFileEditor";
 import { useDismissOnBack } from "./useDismissOnBack";
 
@@ -68,6 +70,13 @@ export function toProjectRelative(rawPath: string, projectRoot: string): string 
 	if (lowerPath === lowerRoot) return "";
 	if (lowerPath.startsWith(`${lowerRoot}/`)) return normalized.slice(root.length + 1);
 	return null;
+}
+
+/** 取父目录（保留相对/绝对形态）：md 预览里本地图片的相对基准就是这个目录。 */
+function parentDirOf(path: string): string {
+	const normalized = path.replace(/\\/g, "/");
+	const cut = normalized.lastIndexOf("/");
+	return cut <= 0 ? "." : normalized.slice(0, cut);
 }
 
 function basename(path: string): string {
@@ -137,6 +146,47 @@ export function classifyFileContentOutcome(outcome: { ok: true; data: FileState 
 	return { phase: "failed" };
 }
 
+/**
+ * 媒体预览（图片 / 视频 / 音频 / PDF）：浏览器原生渲染，不走文本通道。
+ *
+ * 字节由 `/api/file-raw` 下发（`<img>`/`<video>` 带不了 Authorization，令牌拼在
+ * query 上）。失败退化成「在新标签打开」而不是空白：最常见原因是项目外路径仍在
+ * 等安全等级确认（403 webError.fileAccessNeedsConfirm），用户至少能看到原因。
+ */
+function MediaPreviewBody(props: { projectId: string; path: string; kind: MediaKind }) {
+	const src = useMemo(() => webFileRawUrl(props.projectId, props.path), [props.projectId, props.path]);
+	const [failed, setFailed] = useState(false);
+	const openInTab = () => window.open(src, "_blank", "noopener");
+	if (props.kind === "pdf") {
+		return (
+			<div className="flex min-h-0 flex-1 flex-col">
+				<iframe title={basename(props.path)} src={src} className="min-h-0 w-full flex-1 border-0 bg-card" />
+			</div>
+		);
+	}
+	if (failed) {
+		return (
+			<div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+				<div className="text-caption text-muted-foreground">{t("web.previewLoadFailed")}</div>
+				<button type="button" className="rounded-md bg-primary px-3 py-2 text-caption font-medium text-primary-foreground active:opacity-80" onClick={openInTab}>
+					{t("web.previewOpenExternally")}
+				</button>
+			</div>
+		);
+	}
+	return (
+		<div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-bg-app p-2">
+			{props.kind === "image" ? (
+				<img src={src} alt={basename(props.path)} className="max-h-full max-w-full object-contain" onError={() => setFailed(true)} onClick={openInTab} />
+			) : props.kind === "video" ? (
+				<video src={src} className="max-h-full w-full max-w-[min(100%,960px)] rounded-lg bg-black" controls autoPlay={false} playsInline onError={() => setFailed(true)} />
+			) : (
+				<audio src={src} className="w-full max-w-[480px]" controls onError={() => setFailed(true)} />
+			)}
+		</div>
+	);
+}
+
 /** 文件模式：md → MarkdownStream（外链新标签页），其余 → 行号文本。
  * 项目外路径先按安全等级求值：允许直接读，需确认则内联「只读查看」卡片，拒绝则说明原因。 */
 function FilePreviewBody({ projectId, path, line, canEdit }: { projectId: string; path: string; line?: number; canEdit: boolean }) {
@@ -151,7 +201,11 @@ function FilePreviewBody({ projectId, path, line, canEdit }: { projectId: string
 	const targetKey = `${projectId}\u0000${path}`;
 	const confirmed = confirmedKey === targetKey;
 
+	// 媒体文件（图片/视频/音频/PDF）不走 /api/file-content：那条路由只回文本或
+	// `binary` 标记，媒体内容会被当成「二进制文件，无法预览」。这里直接交给浏览器原生渲染。
+	const mediaKind = useMemo(() => mediaKindOfPath(path), [path]);
 	useEffect(() => {
+		if (mediaKind) return;
 		let alive = true;
 		setView({ phase: "loading" });
 		fetchFileContent(projectId, path, { confirmed })
@@ -160,7 +214,8 @@ function FilePreviewBody({ projectId, path, line, canEdit }: { projectId: string
 		return () => {
 			alive = false;
 		};
-	}, [projectId, path, confirmed, confirmTick, reloadTick]);
+	}, [projectId, path, confirmed, confirmTick, reloadTick, mediaKind]);
+	if (mediaKind) return <MediaPreviewBody projectId={projectId} path={path} kind={mediaKind} />;
 	if (view.phase === "confirm") {
 		return (
 			<div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
@@ -235,7 +290,11 @@ function FilePreviewBody({ projectId, path, line, canEdit }: { projectId: string
 				{editBar}
 				{/* scroll-ok: text —— 单一文本块（pre / markdown 正文），没有行列表可切，虚拟化无从下手。 */}
 				<div className="markdown-body min-h-0 flex-1 overflow-y-auto px-3 py-2">
-					<MarkdownStream text={data.content} onOpenExternal={(url: string) => window.open(url, "_blank", "noopener")} />
+					{/* 预览的 md 里也会有本地图片引用：baseDir 取该文件所在目录，绝对路径 →
+					    /api/file-raw（浏览器里没有 pideck-file:// 协议）。 */}
+					<FileLinkBaseProvider baseDir={parentDirOf(path)} projectId={projectId} toLocalResourceUrl={(absolutePath: string) => webFileRawUrl(projectId, absolutePath)}>
+						<MarkdownStream text={data.content} onOpenExternal={(url: string) => window.open(url, "_blank", "noopener")} />
+					</FileLinkBaseProvider>
 				</div>
 				{truncatedNotice}
 			</div>

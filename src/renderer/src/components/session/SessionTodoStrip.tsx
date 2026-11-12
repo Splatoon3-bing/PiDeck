@@ -8,7 +8,7 @@ import { VirtualStack, VIRTUAL_STACK_MIN_ROWS } from "../ui-shadcn/virtual-stack
 import { Collapsible, CollapsibleContent } from "../ui-shadcn/collapsible";
 import { isCoherentComposerRuntimeUi, type RuntimeHandle } from "./ComposerRuntimeIntegrations";
 import { ComposerWidgetFrame, useComposerWidgetCollapsed } from "./ComposerWidgetLayout";
-import { parseAgentTodoItems, runtimeTodosToItems, sessionTodoSnapshotToItems, stripPiDeckTodoWidgetMetadata, type AgentTodoItem } from "./agentTodoParser";
+import { parseTodoWidgetItems, runtimeTodosToItems, sessionTodoSnapshotToItems, type AgentTodoItem, type AgentTodoWidget } from "./agentTodoParser";
 import { useSessionTodoSnapshot } from "../../hooks/useSessionTodoSnapshot";
 import { useToolDerivedActivity } from "../../hooks/useToolDerivedActivity";
 
@@ -33,7 +33,7 @@ const DISMISSED_WIDGETS_KEY = "pid:session-dismissed-widgets-v2";
 /** 手动关闭记录：key = widgetDismissalId(sessionId, widgetKey)，value = 关闭时的内容指纹。 */
 type DismissedWidgets = Record<string, string>;
 /** 一个 todo 数据源的行快照（pi widget / DSH todos / 历史快照归一化后的同构行式）。 */
-export type TodoWidgetLines = { key: string; lines: readonly string[] };
+export type TodoWidgetLines = AgentTodoWidget;
 type WidgetLines = TodoWidgetLines;
 
 /** 列表内容指纹（djb2）：只需稳定区分「工具是否更新过列表」，不需要密码学强度。 */
@@ -181,9 +181,17 @@ export function useSessionTodoSources(sessionId: string): TodoWidgetLines[] {
 		: undefined;
 	const coherent = isCoherentComposerRuntimeUi(runtimeHandle, runtimeUi) ? runtimeUi : undefined;
 	const widgets = coherent?.widgets ?? {};
+	// 活会话的 widgets 是内存态：runtime 换代/关闭时会整表清空（session-atoms 的
+	// bindingChanged / closed 分支），而扩展只在工具调用与 session_start 时重发。
+	// 清空后若仍只认 widget，任务条会直接消失或停在最后一帧旧状态——所以这里把
+	// 「没有 todo widget」也算进快照兜底条件，从会话文件补回最新落盘状态。
+	const hasTodoWidget = Boolean(widgets["pi-deck-todo"]?.length || widgets["pi-deck-plan-todos"]?.length);
 
-	// 会话级 todo 快照：仅历史会话（无 coherent runtime）拉取，避免活会话多余 IPC
-	const todoSnapshot = useSessionTodoSnapshot(sessionId, !coherent);
+	// 会话级 todo 快照：历史会话（无 coherent runtime）或活会话 widget 缺失时拉取。
+	// 刻意不做「快照反向覆盖 widget」的对账：快照是异步读取的，回合内读到的可能比
+	// 内存 widget 更旧，反向覆盖会把新状态推回旧的；丢帧由「无 requestId 仍生效」
+	// 与「widget 缺失回落」两条兜底，不引入倒退路径。
+	const todoSnapshot = useSessionTodoSnapshot(sessionId, !coherent || !hasTodoWidget);
 
 	// ACP 的待办常常只存在于工具调用参数里（CodeBuddy 的 TaskCreate/TaskUpdate、Claude 的
 	// TodoWrite、Codex 的 update_plan），协议层并不总有 plan 帧。冷会话（无 runtime）也要
@@ -204,32 +212,41 @@ export function useSessionTodoSources(sessionId: string): TodoWidgetLines[] {
 			const list = Array.isArray(todos) && todos.length > 0 ? todos : derived.todos;
 			if (list.length === 0) return [];
 			// key 沿用 dsh-todos：两后端是同构 TodoItem[] 消费，dismiss 指纹按内容算，不区分来源。
-			return [{ key: "dsh-todos", lines: todoItemsToLines(runtimeTodosToItems(list)) }];
+			return [{ key: "dsh-todos", lines: todoItemsToLines(runtimeTodosToItems(list)), items: runtimeTodosToItems(list) }];
 		}
 		// ACP 历史会话：runtime 已释放，只剩归档消息 → 用工具调用推导的清单
 		if (isAcp && derived.todos.length > 0) {
-			return [{ key: "dsh-todos", lines: todoItemsToLines(runtimeTodosToItems(derived.todos)) }];
+			const items = runtimeTodosToItems(derived.todos);
+			return [{ key: "dsh-todos", lines: todoItemsToLines(items), items }];
 		}
 		if (!coherent) {
 			const snapshot = sessionTodoSnapshotToItems(todoSnapshot);
-			return snapshot.length > 0 ? [{ key: "snapshot", lines: todoItemsToLines(snapshot) }] : [];
+			return snapshot.length > 0 ? [{ key: "snapshot", lines: todoItemsToLines(snapshot), items: snapshot }] : [];
 		}
 		const result: WidgetLines[] = [];
 		for (const key of ["pi-deck-todo", "pi-deck-plan-todos"]) {
 			const raw = widgets[key];
 			if (raw?.length) result.push({ key, lines: raw });
 		}
-		return result;
+		if (result.length > 0) return result;
+		// coherent 但这一代 runtime 还没收到过 todo widget（首帧未到 / 换代后被清空）：
+		// 回落到会话文件快照，而不是当成「没有计划」。
+		const fallback = sessionTodoSnapshotToItems(todoSnapshot);
+		return fallback.length > 0 ? [{ key: "snapshot", lines: todoItemsToLines(fallback), items: fallback }] : [];
 	}, [coherent, isAcp, derived, runtime?.backend, runtime?.state?.todos, todoSnapshot, widgets]);
 }
 
-/** 行快照 → 待办项：pi-deck-todo 先剥离元数据行，再统一解析。 */
+/**
+ * 行快照 → 待办项：**按来源分别解析**，不把多个源的行拼成一个数组。
+ *
+ * 拼平会把 `pi-deck-todo` 与 `pi-deck-plan-todos` 的同名任务挤进同一个 seenTitles
+ * 消歧表：两条不同任务拿到相邻 id，React 复用行节点后状态互相覆盖（「完成了又变
+ * 回未完成」）。逐源解析 + id 带来源前缀后，两个源各自稳定。
+ */
 export function todoWidgetsToItems(widgets: readonly TodoWidgetLines[]): AgentTodoItem[] {
-	const lines: string[] = [];
-	for (const widget of widgets) {
-		lines.push(...(widget.key === "pi-deck-todo" ? stripPiDeckTodoWidgetMetadata(widget.lines) : widget.lines));
-	}
-	return parseAgentTodoItems(lines);
+	const items: AgentTodoItem[] = [];
+	for (const widget of widgets) items.push(...(widget.items ?? parseTodoWidgetItems(widget)));
+	return items;
 }
 
 /** 单条待办行（折叠条与右侧边栏面板共用）。 */

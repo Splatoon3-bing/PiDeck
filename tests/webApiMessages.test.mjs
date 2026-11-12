@@ -108,3 +108,21 @@ test("maps historical user images to file parts and skips oversized ones (P2)", 
 	assert.equal(fileParts[0].mediaType, "image/png");
 	assert.equal(fileParts[0].data, "data:image/png;base64,abc");
 });
+
+test("maps historical videos to read-only blob file parts (no re-submit, no billing)", () => {
+	const result = chatMessagesToUiMessages([
+		message({ role: "assistant", text: "", videos: [{ type: "video", ref: "a".repeat(64) + ".mp4", mimeType: "video/mp4", seconds: 5 }] }),
+		// 脏数据：缺 ref / 类型不对的条目直接跳过，不锻造空 src
+		message({ id: "v2", role: "assistant", text: "", videos: [{ type: "video", mimeType: "video/mp4" }, { type: "image" }] }),
+		// 上游没给 mimeType 时回退 video/mp4（不至于整段丢渲染）
+		message({ id: "v3", role: "assistant", text: "", videos: [{ type: "video", ref: "b".repeat(64) + ".webm" }] }),
+	]);
+	const first = result[0].parts.filter((part) => part.type === "file");
+	assert.equal(first.length, 1);
+	assert.equal(first[0].mediaType, "video/mp4");
+	assert.equal(first[0].url, `/api/videogen/blob/${encodeURIComponent("a".repeat(64) + ".mp4")}`);
+	// 无令牌时地址不带 ?token=（环回绑定不校验）
+	assert.ok(!first[0].url.includes("token="));
+	assert.equal(result[1].parts.length, 0);
+	assert.equal(result[2].parts[0].mediaType, "video/mp4");
+});

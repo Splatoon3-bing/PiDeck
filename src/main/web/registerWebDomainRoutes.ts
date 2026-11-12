@@ -6,6 +6,7 @@ import { WebAgentRoutes } from "./WebAgentRoutes";
 import { WebFavoritesRoutes } from "./WebFavoritesRoutes";
 import { WebNoticeRoutes } from "./WebNoticeRoutes";
 import { WebImageGenRoutes, type WebImageGenRoutesDeps } from "./WebImageGenRoutes";
+import { WebVideoGenRoutes, type WebVideoGenRoutesDeps } from "./WebVideoGenRoutes";
 import { WebHostPluginRoutes, getWebHostPluginDeps } from "./WebHostPluginRoutes";
 
 /** 域 Store 一律经 provider 求值（启动后段才赋值），这里只声明 Web 路由需要的形状。 */
@@ -16,10 +17,12 @@ export type WebDomainRouteDeps = {
 	favorites: ReturnType<typeof webDomainProviders>["favorites"];
 	notices: ReturnType<typeof webDomainProviders>["notices"];
 	imagegen: () => WebImageGenRoutesDeps | null;
+	/** 生视频产物出口依赖（只读 blob 路径解析）；同样延迟到首次请求再取。 */
+	videogen: () => WebVideoGenRoutesDeps | null;
 };
 
 /** 延迟装配的 Store 域统一在此注册，main/index.ts 只提供能力，不承担路由细节。 */
-export function registerWebDomainRoutes(target: Pick<WebServiceManager, "automationRoutes" | "agentRoutes" | "favoriteRoutes" | "noticeRoutes" | "imageGenRoutes" | "hostPluginRoutes">, deps: WebDomainRouteDeps): void {
+export function registerWebDomainRoutes(target: Pick<WebServiceManager, "automationRoutes" | "agentRoutes" | "favoriteRoutes" | "noticeRoutes" | "imageGenRoutes" | "videoGenRoutes" | "hostPluginRoutes">, deps: WebDomainRouteDeps): void {
 	target.automationRoutes = new WebAutomationRoutes({ store: deps.automation.store, runs: deps.automation.runs, projects: { get: (projectId) => deps.projects.get(projectId) } });
 	target.agentRoutes = new WebAgentRoutes({ store: deps.agents.store, invoke: deps.agents.invoke, hasSession: deps.agents.hasSession });
 	target.favoriteRoutes = new WebFavoritesRoutes({ store: deps.favorites.store, getSession: deps.favorites.getSession });
@@ -37,6 +40,19 @@ export function registerWebDomainRoutes(target: Pick<WebServiceManager, "automat
 				imagegenRoutes = new WebImageGenRoutes(imagegen);
 			}
 			return imagegenRoutes.handle(url, request, response);
+		},
+	};
+	// 生视频 blob 出口：与 imagegen 同构的懒解析代理（videoBlobStore 同样在更晚的启动阶段构造）。
+	// 只读路由，不存在生成链路，因此看历史视频不会触发任何上游调用/计费。
+	let videogenRoutes: WebVideoGenRoutes | null = null;
+	target.videoGenRoutes = {
+		async handle(url, request, response) {
+			if (!videogenRoutes) {
+				const videogen = deps.videogen();
+				if (!videogen) return false;
+				videogenRoutes = new WebVideoGenRoutes(videogen);
+			}
+			return videogenRoutes.handle(url, request, response);
 		},
 	};
 	// 宿主插件服务在 registerIpc() 后段才装配，而本函数在更早的 Web 服务启动路径里执行：

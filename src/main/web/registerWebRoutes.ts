@@ -36,7 +36,7 @@ export { getWebHostPluginDeps, installWebHostPluginDeps } from "./WebHostPluginR
 
 export type WebRoutesRegistration = WebDomainRouteDeps & {
 	/** Web 服务实例：写三个注入点（workspaceRoutes / settingsRoutes / terminalRoutes）。 */
-	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes" | "terminalRoutes" | "automationRoutes" | "agentRoutes" | "favoriteRoutes" | "noticeRoutes" | "imageGenRoutes" | "hostPluginRoutes">;
+	target: Pick<WebServiceManager, "workspaceRoutes" | "settingsRoutes" | "terminalRoutes" | "automationRoutes" | "agentRoutes" | "favoriteRoutes" | "noticeRoutes" | "imageGenRoutes" | "videoGenRoutes" | "hostPluginRoutes">;
 	projects: { list: () => Project[]; get: (projectId: string) => Project | undefined };
 	git: GitService;
 	files: FileSystemService;

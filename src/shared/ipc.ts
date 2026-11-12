@@ -1236,6 +1236,8 @@ export const ipcChannels = {
 	videogenSaveConfig: "videogen:save-config",
 	/** 某会话的全部任务快照（重启后渲染层恢复进行中占位用） */
 	videogenListJobs: "videogen:list-jobs",
+	/** 拉取某供应商的视频模型能力目录（openai-videos：GET {base}/v1/videos/models） */
+	videogenListModels: "videogen:list-models",
 	/** 任务状态事件（主进程 → 渲染层单通道推送，按 sessionId 过滤消费） */
 	videogenEvent: "videogen:event",
 

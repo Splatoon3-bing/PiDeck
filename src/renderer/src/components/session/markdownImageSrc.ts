@@ -19,6 +19,16 @@ import { extractFileLinkLocation, resolveFileLinkPath } from "../../utils/filePa
 const REMOTE_IMAGE_URL = /^https?:\/\//i;
 /** 已是 PiDeck 自定义图片协议的 URL：协议侧自己校验白名单，这里不重复解析。 */
 const PASSTHROUGH_IMAGE_URL = /^pideck-(?:img|file):/i;
+/**
+ * Web 端已解析好的字节路由（`/api/file-raw?projectId&path&token`）。
+ *
+ * 该 URL 由同一个函数产出：`MarkdownStream` 的 `urlTransform` 先解析一遍写进 hast，
+ * `MarkdownImage` 拿到的 `destination` 已是结果。若再当文件路径解析一次，`/api/file-raw`
+ * 会被当成「项目根下的相对路径」→ 变成 `path=%2Fapi%2Ffile-raw` → 服务端 404 →
+ * 正文图片在 Web 端一律「图片加载失败」（桌面端因为 `pideck-file:` 命中上面的白名单而幸免）。
+ * 所以这里必须幂等：已解析好的结果原样返回。
+ */
+const PASSTHROUGH_BYTE_ROUTE = /^\/api\/file-raw[?#]/i;
 const FILE_URL = /^file:\/\//i;
 /** 任意 scheme（data:/blob:/javascript:/vbscript: …）：除 file:// 外一律不渲染。 */
 const ANY_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
@@ -76,6 +86,7 @@ export function resolveMarkdownImageSrc(destination: string, context: MarkdownIm
 	if (raw === "" || CONTROL_CHARS.test(raw)) return undefined;
 	if (REMOTE_IMAGE_URL.test(raw)) return raw;
 	if (PASSTHROUGH_IMAGE_URL.test(raw)) return raw;
+	if (PASSTHROUGH_BYTE_ROUTE.test(raw)) return raw;
 
 	const authored = localPathFromDestination(raw);
 	if (authored === undefined) return undefined;

@@ -123,3 +123,24 @@ test("目标里的 #/? 视为请求后缀，不参与路径解析", () => {
 	assert.equal(slash(resolve("./a#1.png")), "local:F:/PiDeck/a");
 	assert.equal(slash(seen[0]), "F:/PiDeck/a");
 });
+
+test("Web 已解析好的 /api/file-raw 字节路由幂等：原样返回，不再当文件路径", () => {
+	// 事故（2026-11-09）：MarkdownStream.urlTransform 先把 `![x](images/a.png)` 解析成
+	// `/api/file-raw?path=%2Fhome%2F…` 写进 hast，MarkdownImage 又解析一次该值 →
+	// `path=%2Fapi%2Ffile-raw` → 服务端 404 → Web 正文图片一律「图片加载失败」。
+	const { resolve, seen } = createResolver("/home/bing/PiDeck");
+	const resolved = "/api/file-raw?projectId=p1&path=%2Fhome%2Fbing%2FPiDeck%2Fimages%2Fa.png&token=T";
+	assert.equal(resolve(resolved), resolved);
+	assert.deepEqual(seen, []);
+});
+
+test("Web 端解析幂等：同一目标解析两次结果一致", () => {
+	const baseDir = "/home/bing/PiDeck";
+	const toLocalUrl = (absolutePath) => `/api/file-raw?projectId=p1&path=${encodeURIComponent(absolutePath)}&token=T`;
+	const resolve = (destination) => resolveMarkdownImageSrc(destination, { baseDir, toLocalUrl });
+	for (const destination of ["images/a.png", "./images/a.png", "/home/bing/PiDeck/images/a.png"]) {
+		const once = resolve(destination);
+		assert.equal(once, `/api/file-raw?projectId=p1&path=%2Fhome%2Fbing%2FPiDeck%2Fimages%2Fa.png&token=T`);
+		assert.equal(resolve(once), once, destination);
+	}
+});

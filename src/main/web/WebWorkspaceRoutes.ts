@@ -3,15 +3,19 @@
  * - GET /api/git/status|diff|log —— Git 抽屉数据（只读，写操作仍回桌面端）
  * - GET /api/files、GET /api/file-content —— 文件抽屉（项目内文件沙箱限制在项目根内 + 有界读取）
  *   与项目外文件预览（绝对路径 / `~/x` 按安全等级求值后只读读取，见 fileContent）
+ * - GET /api/file-raw —— 媒体字节出口（图片/视频/PDF 内联展示，支持单段 Range，见 fileRaw）
  * - GET /api/prompts、GET /api/prompts/:slug —— 中文提示词精选（XuePromptManager）
  *
  * 独立模块承载（WebServiceManager 已超 1600 行），经 WebServiceManager.handleRequest
  * 在 /api/* 404 兜底前分发；所有路由只读，不引入新的写通道。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve, dirname } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { open, readFile, stat } from "node:fs/promises";
+import { mediaMimeTypeByPath } from "../../shared/mediaMime";
 import type { CommitEntry, FileTreeNode, GitBranchInfo, PiExtensionListResult, PiExtensionSummary, PiSkillListResult, PiSkillSummary, Project, ScratchPadScope, YaoPromptDetailResult, YaoPromptListResult } from "../../shared/types";
 // GitService 是本地实现：它返回的是「文件系统绑定」形状（绝对路径，没有渲染层的 ProjectFileTarget），
 // 由 gitIpc 在 IPC 边界装饰成 shared 的 GitResource/Target。Web 路由同样直接吃本地形状——
@@ -23,6 +27,8 @@ import { isPathInsideProject } from "../fs/FileSystemService";
 import type { UserReadAccessVerdict } from "../security/policy";
 import { getAppLogger } from "../logging/sharedLogger";
 import { readJson, WebBodyTooLargeError, WebInvalidJsonError, WEB_CORS_HEADERS } from "./WebHttpResponders";
+// 同文件的 Range 解析调用点（fileRaw）用这份 import；对外仍按原路径 re-export（见下方 export）
+import { parseSingleByteRange } from "./byteRange";
 
 export type WebWorkspaceRoutesDeps = {
 	/** projectId → 项目根解析（沿用 WebServiceManager 同源数据，避免第二套项目表）。 */
@@ -235,6 +241,9 @@ function expandHomePath(path: string): string {
 	return join(homedir(), rest.slice(1));
 }
 
+/** 单段 Range 解析已迁到叶子模块（视频 blob 出口也用它，见 byteRange.ts）；此处 re-export 保持既有调用点与测试不变。 */
+export { parseSingleByteRange } from "./byteRange";
+
 /**
  * 文件/目录名校验：只允许纯文件名。
  * 桌面 `FileSystemService` 也有同源校验；Web 路由先挡一道，避免把非法名
@@ -283,6 +292,7 @@ export class WebWorkspaceRoutes {
 			if (url.pathname === "/api/files/rename" && request.method === "POST") return await this.renameEntry(request, response);
 			if (url.pathname === "/api/files/delete" && request.method === "POST") return await this.deleteEntry(request, response);
 			if (url.pathname === "/api/file-content" && request.method === "GET") return await this.fileContent(url, response);
+			if (url.pathname === "/api/file-raw" && (request.method === "GET" || request.method === "HEAD")) return await this.fileRaw(url, request, response);
 			if (url.pathname === "/api/file-content" && request.method === "POST") return await this.writeFileContent(request, response);
 			if (url.pathname === "/api/git/stage" && request.method === "POST") return await this.gitStage(request, response);
 			if (url.pathname === "/api/git/unstage" && request.method === "POST") return await this.gitUnstage(request, response);
@@ -673,63 +683,55 @@ export class WebWorkspaceRoutes {
 		return true;
 	}
 
-	private async fileContent(url: URL, response: ServerResponse): Promise<boolean> {
+	/**
+	 * 读路径求值（`/api/file-content` 与 `/api/file-raw` 共用同一道门）。
+	 *
+	 * 路径分流（Web 端不要求文件必须在项目内）：
+	 * - 项目内（相对路径或绝对路径）→ 原有项目根沙箱（含符号链接逃逸检查）；
+	 * - 项目外且是相对路径（`..` 逃逸）→ 仍 403，不把 Web 变成任意目录进目录浏览；
+	 * - 项目外绝对路径 / `~/x` → 安全等级求值（allow 直读 / ask 需确认 / deny 拒绝）。
+	 * 错误分流：越界 → 403；文件不存在（ENOENT）→ 404，不能一律笼统当 403。
+	 */
+	private async resolveReadableFile(url: URL): Promise<{ absolute: string } | { failure: { status: number; code: string; message: string; details?: Record<string, unknown> } }> {
 		const root = this.projectRoot(url.searchParams.get("projectId"));
-		if (!root) {
-			sendError(response, 404, "webError.projectNotFound", "project not found");
-			return true;
-		}
+		if (!root) return { failure: { status: 404, code: "webError.projectNotFound", message: "project not found" } };
 		const rawTarget = url.searchParams.get("path") ?? "";
-		if (!rawTarget) {
-			sendError(response, 400, "webError.invalidRequest", "path is required");
-			return true;
-		}
-		// 路径分流（Web 端不要求文件必须在项目内）：
-		// - 项目内（相对路径或绝对路径）→ 原有项目根沙箱（含符号链接逃逸检查）；
-		// - 项目外且是相对路径（`..` 逃逸）→ 仍 403，不把 Web 变成任意目录进目录浏览；
-		// - 项目外绝对路径 / `~/x` → 安全等级求值（allow 直读 / ask 需确认 / deny 拒绝）。
-		// 错误分流：越界 → 403；文件不存在（ENOENT）→ 404，不能一律笼统当 403。
+		if (!rawTarget) return { failure: { status: 400, code: "webError.invalidRequest", message: "path is required" } };
 		const target = expandHomePath(rawTarget);
 		const absoluteTarget = isAbsolute(target) ? resolve(target) : resolve(root, target);
-		let absolute: string;
 		if (isPathInsideProject(root, absoluteTarget)) {
 			try {
-				absolute = await assertProjectFileReadPath(root, absoluteTarget);
+				return { absolute: await assertProjectFileReadPath(root, absoluteTarget) };
 			} catch (error) {
 				// vm/跨模块场景下 instanceof Error 不可靠（错误可能来自另一个 realm），用 message 判别
 				const message = typeof error === "object" && error !== null && "message" in error ? String((error as { message: unknown }).message) : "";
-				if (message === FILE_OUTSIDE_PROJECT_ERROR) {
-					sendError(response, 403, "webError.fileOutsideProject", "path escapes project root");
-					return true;
-				}
+				if (message === FILE_OUTSIDE_PROJECT_ERROR) return { failure: { status: 403, code: "webError.fileOutsideProject", message: "path escapes project root" } };
 				const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-				if (missing) {
-					sendError(response, 404, "webError.fileNotFound", "file not found");
-					return true;
-				}
+				if (missing) return { failure: { status: 404, code: "webError.fileNotFound", message: "file not found" } };
 				throw error;
 			}
-		} else if (!isAbsolute(target)) {
-			sendError(response, 403, "webError.fileOutsideProject", "path escapes project root");
-			return true;
-		} else {
-			// 确认后的读仍然是同一条路由：`confirm=1` 只能把 ask 降为放行，deny 永远不降级
-			const verdict = this.deps.userReadAccess?.({ filePath: absoluteTarget, cwd: root, projectRoot: root, sessionId: url.searchParams.get("sessionId") ?? undefined }) ?? { access: "ask" as const, reason: "policy-unavailable" as const };
-			if (verdict.access === "deny") {
-				sendError(response, 403, "webError.fileAccessDenied", "security policy denies this path", { reason: verdict.reason });
-				return true;
-			}
-			if (verdict.access === "ask" && url.searchParams.get("confirm") !== "1") {
-				sendError(response, 403, "webError.fileAccessNeedsConfirm", "confirmation required to read this path", { reason: verdict.reason });
-				return true;
-			}
-			absolute = absoluteTarget;
 		}
+		if (!isAbsolute(target)) return { failure: { status: 403, code: "webError.fileOutsideProject", message: "path escapes project root" } };
+		// 确认后的读仍然是同一条路由：`confirm=1` 只能把 ask 降为放行，deny 永远不降级
+		const verdict = this.deps.userReadAccess?.({ filePath: absoluteTarget, cwd: root, projectRoot: root, sessionId: url.searchParams.get("sessionId") ?? undefined }) ?? { access: "ask" as const, reason: "policy-unavailable" as const };
+		if (verdict.access === "deny") return { failure: { status: 403, code: "webError.fileAccessDenied", message: "security policy denies this path", details: { reason: verdict.reason } } };
+		if (verdict.access === "ask" && url.searchParams.get("confirm") !== "1") return { failure: { status: 403, code: "webError.fileAccessNeedsConfirm", message: "confirmation required to read this path", details: { reason: verdict.reason } } };
+		return { absolute: absoluteTarget };
+	}
+
+	private async fileContent(url: URL, response: ServerResponse): Promise<boolean> {
+		const resolved = await this.resolveReadableFile(url);
+		if ("failure" in resolved) {
+			sendError(response, resolved.failure.status, resolved.failure.code, resolved.failure.message, resolved.failure.details);
+			return true;
+		}
+		const { absolute } = resolved;
 		const info = await stat(absolute).catch(() => null);
 		if (!info?.isFile()) {
 			sendError(response, 404, "webError.fileNotFound", "file not found");
 			return true;
 		}
+
 		if (info.size > MAX_FILE_CONTENT_BYTES) {
 			// 超限不再空手而归：从文件句柄有界读前 512KB 给截断预览（不整读大文件，防内存峰值）；
 			// 截断样本里含 NUL 同样按二进制拒绝（大文件极可能是日志外的二进制类型）。
@@ -771,6 +773,62 @@ export class WebWorkspaceRoutes {
 	 * 2) 能力层做 realpath/symlink 校验并以原子替换写盘；
 	 * 3) expectedMtimeMs 不匹配时回 409，避免静默覆盖外部改动（用户可选 force）。
 	 */
+	/**
+	 * 媒体字节出口：`GET /api/file-raw?projectId&path[&confirm=1]`
+	 *
+	 * 为什么需要它：Web 端要内联展示本地图片/视频/PDF，而 `<img>`/`<video>`/`<iframe>`
+	 * 只能发普通 GET（带不上 Authorization），字节只能由服务端下发；令牌走 `?token=`
+	 * （与 `/api/imagegen/blob` 同一条链，由 WebTokenAuth 统一校验）。
+	 *
+	 * 响应语义对齐成熟实现（express 的 `send` / tornado 的 StaticFileHandler）：
+	 * - `Accept-Ranges: bytes`；单段 `Range` → 206 + `Content-Range`（音视频拖进度必需）；
+	 * - 多段 Range / 非 bytes 单位 → 忽略 Range 回 200 全量（HTTP 规范允许）；
+	 * - 区间越界 → 416，并在 `Content-Range` 里回 `bytes *` 加 `/<size>`（星号表示请求区间不可满足）；
+	 * - `Content-Type` 按扩展名（shared/mediaMime 与桌面自定义协议共用一份表），
+	 *   未知按 `application/octet-stream`（配合 nosniff 浏览器不会瞎猜）。
+	 *
+	 * 读路径与 `/api/file-content` 共用 `resolveReadableFile`：同一道项目沙箱 +
+	 * 安全等级门，不因为「这是图片」就放宽。
+	 */
+	private async fileRaw(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+		const resolved = await this.resolveReadableFile(url);
+		if ("failure" in resolved) {
+			sendError(response, resolved.failure.status, resolved.failure.code, resolved.failure.message, resolved.failure.details);
+			return true;
+		}
+		const { absolute } = resolved;
+		const info = await stat(absolute).catch(() => null);
+		if (!info?.isFile()) {
+			sendError(response, 404, "webError.fileNotFound", "file not found");
+			return true;
+		}
+		const size = info.size;
+		const range = parseSingleByteRange(request.headers.range, size);
+		if (range === null) {
+			response.writeHead(416, { "content-range": `bytes */${size}`, "accept-ranges": "bytes", ...WEB_CORS_HEADERS });
+			response.end();
+			return true;
+		}
+		response.writeHead(range ? 206 : 200, {
+			"content-type": mediaMimeTypeByPath(absolute) ?? "application/octet-stream",
+			"accept-ranges": "bytes",
+			"x-content-type-options": "nosniff",
+			// 同一路径的内容会被编辑器/agent 改写，不做长缓存；但也别让大图每次刷新都重下。
+			"cache-control": "private, max-age=60",
+			"content-length": String(range ? range.end - range.start + 1 : size),
+			...WEB_CORS_HEADERS,
+			...(range ? { "content-range": `bytes ${range.start}-${range.end}/${size}` } : {}),
+		});
+		if (request.method === "HEAD" || size === 0) {
+			response.end();
+			return true;
+		}
+		// 流式回传：媒体文件动辄几十 MB，绝不能用 readFile 整读进主进程内存。
+		// 客户端中断（拖进度/关页面）是常态，pipeline 的 EPIPE 无需再写响应。
+		await pipeline(createReadStream(absolute, range ? { start: range.start, end: range.end } : undefined), response).catch(() => undefined);
+		return true;
+	}
+
 	private async writeFileContent(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
 		if (!this.deps.files?.writeFile) {
 			sendError(response, 503, "webError.filesUnavailable", "file write is not available");

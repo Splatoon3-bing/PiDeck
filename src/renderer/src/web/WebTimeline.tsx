@@ -25,6 +25,7 @@ import { SingleLinePreview } from "@/components/session/SingleLinePreview";
 import { TimelineMarker } from "../components/session/TimelineMarker";
 import { LogoMark } from "../components/app/LogoMark";
 import { copyTextToClipboard } from "./webClipboard";
+import { WebMediaPart } from "./WebMediaPart";
 import type { WebHistoryPhase } from "./webHistoryLoad";
 
 /** 命令式跳转句柄：虚拟化后离屏行没有 DOM，父组件必须走这份映射而不是 getElementById。 */
@@ -55,10 +56,10 @@ export { uiMessageText, uiMessageImages } from "./webMessageParts";
 
 // 分组纯函数已抽到 webTimelineGrouping（叶子模块，vm 沙箱单测可用）；re-export 保持既有导入路径不破
 import { groupTimelineEntries, sliceEntriesToBoundary, turnPrefixBoundary, validTurnPrefix, type TurnPrefixCache } from "./webTimelineGrouping";
-import type { AssistantTurn, TimelineEntry, TurnSegment, WebToolPart } from "./webTimelineGrouping";
+import type { AssistantTurn, MediaSegment, TimelineEntry, TurnSegment, WebToolPart } from "./webTimelineGrouping";
 export { groupTimelineEntries } from "./webTimelineGrouping";
 export { validTurnPrefix, turnPrefixBoundary, sliceEntriesToBoundary } from "./webTimelineGrouping";
-export type { AssistantTurn, TimelineEntry, TurnSegment, WebToolPart } from "./webTimelineGrouping";
+export type { AssistantTurn, MediaSegment, TimelineEntry, TimelineSegment, TurnSegment, WebToolPart } from "./webTimelineGrouping";
 
 /** 用户消息右对齐气泡（结构与桌面 UserBubble 一致；P1/P2 增加图片与 hover 操作）。 */
 export const WebUserBubble = memo(function WebUserBubble(props: {
@@ -324,7 +325,15 @@ export const WebAssistantTurn = memo(function WebAssistantTurn(props: { turn: As
 	// 流式期间是否自动展开过程组：设置项 expandInterimDuringStream 的 Web 端消费点。
 	// 手动开合状态永远优先（用户点过就不再跟着流式状态跑）。
 	const processOpen = manualOpen ?? (props.isStreaming && props.autoExpandProcess !== false);
-	const hasProcess = turn.segments.length > 0;
+	// 媒体产物（生图/生视频结果）常驻容器外：它是这条消息的**结论**，不是过程；
+	// 收进折叠容器等于「生成了但用户看不到」。
+	const mediaSegments: MediaSegment[] = [];
+	const processSegments: TurnSegment[] = [];
+	for (const segment of turn.segments) {
+		if (segment.kind === "media") mediaSegments.push(segment);
+		else processSegments.push(segment);
+	}
+	const hasProcess = processSegments.length > 0;
 	// 流式中的末段正文挂折叠容器外常显（打字机，桌面 liveInterimId 同款）：它仍在 segments
 	// 里参与计数，但容器内不再重复渲染；收尾后重分组提升为 finalText，此处自然消失。
 	const liveTextSegment = props.isStreaming && turn.liveTextId ? turn.segments.find((segment) => segment.kind === "interim" && segment.id === turn.liveTextId) : undefined;
@@ -367,6 +376,7 @@ export const WebAssistantTurn = memo(function WebAssistantTurn(props: { turn: As
 					{processOpen ? (
 						<div className="execution-fold-details mt-0.5 flex flex-col">
 							{turn.segments.map((segment) => {
+								if (segment.kind === "media") return null; // 媒体常驻容器外，容器内不双显
 								if (props.isStreaming && segment.id === turn.liveTextId) return null; // 已挂容器外，容器内不双显
 								if (segment.kind === "thinking") {
 									// 按段流式状态驱动 sweep：只有真正还在流的思考块转圈，已完成的块即使本轮仍在流式也不闪
@@ -403,6 +413,7 @@ export const WebAssistantTurn = memo(function WebAssistantTurn(props: { turn: As
 					<WebAssistantText text={liveTextString} isStreaming onOpenFile={props.onOpenFile} />
 				</div>
 			) : null}
+			{mediaSegments.length > 0 ? <div className="flex flex-col gap-2">{mediaSegments.map((segment) => (segment.kind === "media" ? <WebMediaPart key={segment.id} segment={segment} /> : null))}</div> : null}
 			{!props.isStreaming && turn.finalText ? (
 				<div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/assistant:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100">
 					<ActionButton label={t("web.msgCopy")} onClick={() => void copyTextToClipboard(turn.finalText)}>

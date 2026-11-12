@@ -20,14 +20,36 @@ export type WebToolPart = {
 /** 回合内一段过程内容：合并后的思考块 / 工具调用 / 中间回复。思考块 running 取块内最后一个 reasoning part 的流式状态（AI SDK state 字段），不再用整轮流式标志。 */
 export type TurnSegment = { kind: "thinking"; id: string; texts: string[]; running?: boolean } | { kind: "tool"; id: string; part: WebToolPart } | { kind: "interim"; id: string; text: string };
 
+/**
+ * 回合内的媒体产物（图片/视频/音频）。
+ *
+ * 生图（imagegen）与生视频（videogen）的 assistant 消息正文是空串，产物在
+ * `images` / `videos` 字段 —— chatMessagesToUiMessages 会把它们映射成 AI SDK 的
+ * `file` part。若不在这里收成独立段，整条消息在 Web 时间线里就是「什么都没有」
+ * （用户看到的正是「生图没渲染」）。
+ */
+export type MediaSegment = {
+	kind: "media";
+	id: string;
+	/** 可直接放进 <img>/<video>/<audio> 的地址（data URL 或带令牌的 HTTP URL） */
+	src: string;
+	/** MIME（`image/png` / `video/mp4` …），决定用哪种标签渲染 */
+	mediaType: string;
+	/** 无障碍文案：alt 或文件名 */
+	alt?: string;
+};
+
+/** 回合内段的联合类型（过程段 + 媒体段）。 */
+export type TimelineSegment = TurnSegment | MediaSegment;
+
 /** 一轮助手回合：用户消息之后的连续 assistant 消息聚合（对齐桌面 run 语义）。 */
 export interface AssistantTurn {
 	/** 回合内首条消息 id（容器 key/锚点） */
 	id: string;
 	/** 回合内全部消息 id（含首条；锚点补偿用） */
 	messageIds: string[];
-	/** 过程内容（不含常驻正文），按原始顺序 */
-	segments: TurnSegment[];
+	/** 过程内容（不含常驻正文）+ 媒体产物，按原始顺序 */
+	segments: TimelineSegment[];
 	/** 最后一段非空正文：常驻折叠容器外；仅在回合结束后提升（见 groupTimelineEntries） */
 	finalText: string;
 	/** 流式中的末段正文段 id：挂折叠容器外常显（打字机），不提升为 finalText。
@@ -41,6 +63,31 @@ export interface AssistantTurn {
 }
 
 export type TimelineEntry = { kind: "user"; id: string; message: UIMessage } | { kind: "turn"; id: string; turn: AssistantTurn };
+
+/** AI SDK `file` part 的最小子集（data URL 或 URL 两种形态）。 */
+export type WebFilePart = { type: "file"; mediaType?: string; data?: string; url?: string; filename?: string };
+
+/** data URL 的 MIME（`data:image/png;base64,…` → `image/png`）。 */
+function mediaTypeOfDataUrl(url: string): string | undefined {
+	const match = /^data:([^;,]+)[;,]/.exec(url);
+	return match?.[1]?.toLowerCase();
+}
+
+/**
+ * `file` part → 媒体段；不是媒体或拿不到地址时返回 null（保持原行为，不锻造空 src）。
+ *
+ * 地址优先级与 webMessageParts.uiMessageImages 一致：`data`（data URL）优先于 `url`。
+ * 生图/生视频历史里 `url` 是带令牌的 blob 路由（`/api/imagegen/blob/<ref>?token=…`），
+ * `<img>`/`<video>` 不能带 Authorization，所以令牌必须已经拼在地址里。
+ */
+export function mediaSegmentFromFilePart(part: WebFilePart, id: string): MediaSegment | null {
+	const src = typeof part.data === "string" && part.data ? part.data : typeof part.url === "string" ? part.url : "";
+	if (!src) return null;
+	const mediaType = (part.mediaType || mediaTypeOfDataUrl(src) || "").toLowerCase();
+	// 只接住媒体：其它 file part（附件/文档）继续走原有渲染，不在时间线里硬塞
+	if (!/^(image|video|audio)\//.test(mediaType)) return null;
+	return { kind: "media", id, src, mediaType, ...(part.filename ? { alt: part.filename } : {}) };
+}
 
 /**
  * 把扁平 messages 聚合成「用户气泡 / 助手回合」交替序列（桌面 groupToolMessages +
@@ -64,7 +111,7 @@ export function groupTimelineEntries(messages: UIMessage[], options: { isStreami
 	const isStreaming = options.isStreaming === true;
 	const entries: TimelineEntry[] = [];
 	let messageIds: string[] = [];
-	let segments: TurnSegment[] = [];
+	let segments: TimelineSegment[] = [];
 	let finalText = "";
 	let finalId = "";
 	let liveTextId: string | undefined;
@@ -72,7 +119,9 @@ export function groupTimelineEntries(messages: UIMessage[], options: { isStreami
 	/** 回合收口。complete：用户消息断开（必完整）或末尾回合且已结束（!isStreaming）。 */
 	const flush = (complete: boolean) => {
 		if (!turnId) return;
-		const tail = segments.at(-1);
+		// 媒体段不参与「末段」判定：生图/生视频回合往往以产物结尾（正文为空），
+		// 若拿媒体当末段，产物之前的正文会被降级成中间回复（收进折叠容器）。
+		const tail = segments.filter((segment) => segment.kind !== "media").at(-1);
 		if (complete) {
 			// 回合结束：仅末段是正文时提升为最终回答（对齐桌面 isRunTail 判定）
 			if (tail && tail.kind === "interim") {
@@ -117,7 +166,10 @@ export function groupTimelineEntries(messages: UIMessage[], options: { isStreami
 		messageIds.push(message.id);
 		for (let index = 0; index < message.parts.length; index += 1) {
 			const part = message.parts[index];
-			if (part.type === "reasoning") {
+			if (part.type === "file") {
+				const media = mediaSegmentFromFilePart(part as unknown as WebFilePart, `${message.id}:p${index}`);
+				if (media) segments.push(media);
+			} else if (part.type === "reasoning") {
 				const text = part.text ?? "";
 				if (!text.trim()) continue;
 				const running = (part as { state?: "streaming" | "done" }).state === "streaming";

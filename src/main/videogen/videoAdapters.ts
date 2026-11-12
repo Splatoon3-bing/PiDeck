@@ -15,6 +15,13 @@ import type { VideoGenProtocolFamily } from "../../shared/videoGenConfig";
  *   GET /gateway/ark/v3/generations/tasks/{taskId}。
  *   状态 queued|running|succeeded|failed，产物 content.video_url。
  *
+ * 第三个协议族 openai-videos 不是 TokenDance 方言，而是 OpenAI 风格三段式
+ * （wb2api 等自建网关的实际形态）：
+ * - POST {base}/v1/videos，body {model, prompt, seconds, resolution?, aspect_ratio?}；
+ * - GET {base}/v1/videos/{id}，状态 queued|in_progress|completed|failed；
+ * - 产物**不给 URL**：必须再 GET {base}/v1/videos/{id}/content（Bearer 鉴权，支持 Range）。
+ *   所以产物在这里表达成「下载请求」（url + headers），而不是裸 URL。
+ *
  * 关键工程决策（见调研报告 §2.2）：不依赖网关的统一查询路由
  * （/gateway/v1/video/generations/{id} 跨协议直接 500「异步协议映射失败」），
  * 查询一律走各协议族专用路由。
@@ -47,8 +54,19 @@ export type VideoSubmitParams = {
 /** 归一后的查询状态（方言同义词在 parse 阶段压平到这里）。 */
 export type NormalizedVideoTaskStatus = "queued" | "running" | "succeeded" | "failed";
 
-/** 查询响应的归一结果。 */
-export type ParsedVideoQuery = { kind: "ok"; status: NormalizedVideoTaskStatus; artifactUrl?: string } | { kind: "error"; message: string };
+/** 查询响应的归一结果。artifacts 只在 succeeded 且有产物时出现。 */
+export type ParsedVideoQuery =
+	| {
+			kind: "ok";
+			status: NormalizedVideoTaskStatus;
+			artifactUrl?: string;
+			/** 取产物需要的额外请求头（openai-videos 的 /content 端点要 Bearer，其它族直接用裸 URL） */
+			artifactHeaders?: Record<string, string>;
+	  }
+	| { kind: "error"; message: string };
+
+/** 解析 succeeded 产物所需上下文：openai-videos 的取片地址要由 baseUrl + taskId 拼，不带在响应里。 */
+export type VideoQueryContext = { family: VideoGenProtocolFamily; baseUrl: string; apiKey: string; taskId: string };
 
 /** 时长合法域：1-30 秒（各模型实际上限更低，这里只做防呆上限，挡误输入）。 */
 export function parseVideoDurationSeconds(raw: string | undefined): number | undefined {
@@ -85,7 +103,8 @@ export function normalizeVideoTaskStatus(raw: unknown): NormalizedVideoTaskStatu
 	// minimax 原生方言的 "succuess" 是官方拼写错误，这里一并归一
 	if (value === "succuess" || value === "succeed" || value === "succeeded" || value === "success" || value === "completed" || value === "done") return "succeeded";
 	if (value === "failed" || value === "error") return "failed";
-	if (value === "running" || value === "processing" || value === "preparing" || value === "generating") return "running";
+	// in_progress 是 OpenAI 风格网关（/v1/videos）的官方状态值，别漏
+	if (value === "running" || value === "in_progress" || value === "in-progress" || value === "processing" || value === "preparing" || value === "generating") return "running";
 	if (value === "queued" || value === "pending" || value === "waiting" || value === "created") return "queued";
 	return undefined;
 }
@@ -98,8 +117,17 @@ export function buildVideoSubmitRequest(family: VideoGenProtocolFamily, params: 
 	const base = trimBase(params.baseUrl);
 	const content: Array<{ type: "text"; text: string }> = [{ type: "text", text: params.prompt }];
 	// 只发有值的字段：各家对未知/空字段的处理不一，缺省字段由上游用模型默认
-	const body: Record<string, unknown> = { model: params.model, content };
 	const duration = parseVideoDurationSeconds(params.duration);
+	if (family === "openai-videos") {
+		// OpenAI 风格：prompt 是顶层字符串，时长字段叫 seconds，画幅叫 aspect_ratio，
+		// 没有 content 数组（那是 TokenDance 两族的形态）。
+		const body: Record<string, unknown> = { model: params.model, prompt: params.prompt };
+		if (params.resolution) body.resolution = normalizeResolution(family, params.resolution);
+		if (duration !== undefined) body.seconds = duration;
+		if (params.ratio) body.aspect_ratio = params.ratio;
+		return { url: `${base}/v1/videos`, headers: authHeaders(params.apiKey), body: JSON.stringify(body) };
+	}
+	const body: Record<string, unknown> = { model: params.model, content };
 	if (params.resolution) body.resolution = normalizeResolution(family, params.resolution);
 	if (duration !== undefined) body.duration = duration;
 	if (params.ratio) body.ratio = params.ratio;
@@ -114,7 +142,9 @@ export function buildVideoSubmitRequest(family: VideoGenProtocolFamily, params: 
 /** 构建查询请求：各族专用查询路由（不走统一路由，理由见文件头）。 */
 export function buildVideoQueryRequest(family: VideoGenProtocolFamily, input: { baseUrl: string; apiKey: string; taskId: string }): VideoQueryRequest {
 	const base = trimBase(input.baseUrl);
-	const path = family === "seedance-ark" ? `/gateway/ark/v3/generations/tasks/${encodeURIComponent(input.taskId)}` : `/gateway/minimax/v2/query/video_generation/${encodeURIComponent(input.taskId)}`;
+	const taskId = encodeURIComponent(input.taskId);
+	if (family === "openai-videos") return { url: `${base}/v1/videos/${taskId}`, headers: authHeaders(input.apiKey) };
+	const path = family === "seedance-ark" ? `/gateway/ark/v3/generations/tasks/${taskId}` : `/gateway/minimax/v2/query/video_generation/${taskId}`;
 	return { url: `${base}${path}`, headers: authHeaders(input.apiKey) };
 }
 
@@ -134,7 +164,7 @@ export function parseVideoSubmitResponse(payload: unknown): { taskId: string } |
  * minimax 网关产物在 task.content.url（响应可能是 {task:{...}} 包裹或直接平铺），
  * 原生在 file.download_url；Ark 在 content.video_url。候选位按序探测。
  */
-export function parseVideoQueryResponse(payload: unknown): ParsedVideoQuery {
+export function parseVideoQueryResponse(payload: unknown, context?: VideoQueryContext): ParsedVideoQuery {
 	if (typeof payload !== "object" || payload === null) return { kind: "error", message: "malformed query response" };
 	const root = payload as Record<string, unknown>;
 	// minimax 方言可能把任务包在 task 字段里，ark 平铺；两种都探测
@@ -146,6 +176,12 @@ export function parseVideoQueryResponse(payload: unknown): ParsedVideoQuery {
 		return { kind: "ok", status, artifactUrl: undefined };
 	}
 	if (status !== "succeeded") return { kind: "ok", status };
+	// OpenAI 风格网关不回产物地址（COS 预签名不外泄）：取片走 /content 端点，必须带令牌。
+	if (context?.family === "openai-videos") {
+		const contentUrl = `${trimBase(context.baseUrl)}/v1/videos/${encodeURIComponent(context.taskId)}/content`;
+		// 只带 Authorization：GET 下载不该带 Content-Type（实测网关容忍，但没理由发）
+		return { kind: "ok", status, artifactUrl: contentUrl, artifactHeaders: { Authorization: `Bearer ${context.apiKey.trim()}` } };
+	}
 	const artifactUrl = findArtifactUrl(taskRoot) ?? findArtifactUrl(root);
 	if (!artifactUrl) return { kind: "error", message: "succeeded without artifact url" };
 	return { kind: "ok", status, artifactUrl };

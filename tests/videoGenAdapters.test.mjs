@@ -161,3 +161,67 @@ test("videoHttpErrorKind：401/403 → invalidKey，404/405 → badBaseUrl，其
 	assert.equal(adapters.videoHttpErrorKind(404), "badBaseUrl");
 	assert.equal(adapters.videoHttpErrorKind(500), "http");
 });
+
+// ── openai-videos（OpenAI 风格 /v1/videos 三段式，如 wb2api）─────────────────
+// 与 TokenDance 两族的结构差异：body 用 prompt/seconds/aspect_ratio（没有 content 数组），
+// 产物不给 URL，取片要打 /v1/videos/{id}/content 并带 Bearer。
+
+test("buildVideoSubmitRequest：openai-videos 用 prompt/seconds/aspect_ratio（不发 content/duration）", () => {
+	const request = adapters.buildVideoSubmitRequest("openai-videos", {
+		baseUrl: "https://gw.example.com/",
+		apiKey: " sk-1 ",
+		model: "minimax-h3",
+		prompt: "一只猫在弹钢琴",
+		resolution: "768P",
+		duration: "5",
+		ratio: "16:9",
+	});
+	assert.equal(request.url, "https://gw.example.com/v1/videos");
+	assert.equal(request.headers.Authorization, "Bearer sk-1");
+	const body = JSON.parse(request.body);
+	assert.equal(body.model, "minimax-h3");
+	assert.equal(body.prompt, "一只猫在弹钢琴");
+	assert.equal(body.seconds, 5);
+	assert.equal(body.resolution, "768P");
+	assert.equal(body.aspect_ratio, "16:9");
+	// TokenDance 形态的字段绝不能漏进来（上游对未知字段的处理不一致）
+	assert.equal("content" in body, false);
+	assert.equal("duration" in body, false);
+	assert.equal("ratio" in body, false);
+});
+
+test("buildVideoSubmitRequest：openai-videos 缺省参数不发字段（交给上游模型默认值）", () => {
+	const request = adapters.buildVideoSubmitRequest("openai-videos", { baseUrl: "https://gw.example.com", apiKey: "sk", model: "m", prompt: "p" });
+	assert.deepEqual(Object.keys(JSON.parse(request.body)).sort(), ["model", "prompt"]);
+});
+
+test("buildVideoQueryRequest：openai-videos 走 /v1/videos/{id}（taskId 编码）", () => {
+	const query = adapters.buildVideoQueryRequest("openai-videos", { baseUrl: "https://gw.example.com/", apiKey: "sk", taskId: "t/1" });
+	assert.equal(query.url, "https://gw.example.com/v1/videos/t%2F1");
+	assert.equal(query.headers.Authorization, "Bearer sk");
+});
+
+test("parseVideoQueryResponse：openai-videos 的 completed 产物是 content 端点 + Bearer", () => {
+	const parsed = adapters.parseVideoQueryResponse({ id: "v1", object: "video", status: "completed", progress: 100 }, { family: "openai-videos", baseUrl: "https://gw.example.com/", apiKey: " sk ", taskId: "v1" });
+	assert.equal(parsed.kind, "ok");
+	assert.equal(parsed.status, "succeeded");
+	assert.equal(parsed.artifactUrl, "https://gw.example.com/v1/videos/v1/content");
+	assert.equal(parsed.artifactHeaders.Authorization, "Bearer sk");
+});
+
+test("parseVideoQueryResponse：openai-videos 的 in_progress 归一到 running，failed 不要求产物", () => {
+	const running = adapters.parseVideoQueryResponse({ status: "in_progress" }, { family: "openai-videos", baseUrl: "https://gw.example.com", apiKey: "sk", taskId: "v1" });
+	assert.equal(running.kind, "ok");
+	assert.equal(running.status, "running");
+	assert.equal(running.artifactUrl, undefined);
+	const failed = adapters.parseVideoQueryResponse({ status: "failed", error: "内容审核未通过" }, { family: "openai-videos", baseUrl: "https://gw.example.com", apiKey: "sk", taskId: "v1" });
+	assert.equal(failed.kind, "ok");
+	assert.equal(failed.status, "failed");
+	assert.equal(adapters.extractVideoVendorError({ status: "failed", error: "内容审核未通过" }), "内容审核未通过");
+});
+
+test("parseVideoQueryResponse：非 openai-videos 族不受上下文影响（仍解析响应里的裸 URL）", () => {
+	const parsed = adapters.parseVideoQueryResponse({ task: { status: "succeed", content: { url: "https://cdn.example.com/v.mp4" } } }, { family: "minimax-v2", baseUrl: "https://gw.example.com", apiKey: "sk", taskId: "t1" });
+	assert.equal(parsed.artifactUrl, "https://cdn.example.com/v.mp4");
+	assert.equal(parsed.artifactHeaders, undefined);
+});

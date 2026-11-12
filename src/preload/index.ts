@@ -18,6 +18,7 @@ import type { DshRunnerNodeInfo, DshRunnerNodeInstallResult } from "../shared/ty
 import type { LocalImageBytes } from "../shared/localImage";
 import type { ImageBlobPayload, ImageGenConfigFile, ImageGenRequest, ImageGenResult, ImageGenSaveResult } from "../shared/types/imagegen";
 import type { VideoGenConfigFile, VideoGenRequest, VideoGenSaveResult, VideoGenSubmitResult, VideoGenJobSnapshot } from "../shared/types/videogen";
+import type { VideoModelCapability } from "../shared/videoModelCatalog";
 import type { CustomThemeListItem } from "../shared/customThemes";
 import type { CatalogCheckResult, CatalogUpdateResult, CatalogUpdateStatus } from "../shared/types/catalog";
 import type { WallpaperEngineItem, WallpaperEngineListResult } from "../shared/wallpaperEngine";
@@ -1892,6 +1893,8 @@ const api = {
 		saveConfig: (config: VideoGenConfigFile) => ipcRenderer.invoke(ipcChannels.videogenSaveConfig, config) as Promise<VideoGenSaveResult>,
 		/** 重启后恢复：某会话全部任务快照（渲染层重建进行中占位） */
 		listJobs: (sessionId: string) => ipcRenderer.invoke(ipcChannels.videogenListJobs, sessionId) as Promise<VideoGenJobSnapshot[]>,
+		/** 视频模型能力目录（按模型纠正分辨率/画幅/时长；仅 openai-videos 有实现） */
+		listModels: (providerId: string) => ipcRenderer.invoke(ipcChannels.videogenListModels, providerId) as Promise<{ ok: true; models: VideoModelCapability[] } | { ok: false; error: string }>,
 		/** 任务状态推送（主进程 → 渲染层；组件卸载必须退订） */
 		onEvent: (callback: (snapshot: VideoGenJobSnapshot) => void) => subscribe(ipcChannels.videogenEvent, callback),
 	},

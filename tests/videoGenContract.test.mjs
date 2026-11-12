@@ -31,6 +31,8 @@ test("IPC 通道三处同步：submit / cancel / get-config / save-config / list
 		["videogenGetConfig", "videogen:get-config"],
 		["videogenSaveConfig", "videogen:save-config"],
 		["videogenListJobs", "videogen:list-jobs"],
+		// 模型能力目录（按模型纠正分辨率/画幅/时长）
+		["videogenListModels", "videogen:list-models"],
 		["videogenEvent", "videogen:event"],
 	]) {
 		assert.match(ipc, new RegExp(`${channelConst}:\\s*"${channelName}"`), `${channelConst} 常量缺失`);

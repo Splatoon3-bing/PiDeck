@@ -5,10 +5,9 @@ import { mermaid } from "@streamdown/mermaid";
 import { createMathPlugin } from "@streamdown/math";
 import { MarkdownLink, remarkLinkifyPaths } from "./MarkdownLink";
 import { MarkdownImage } from "./MarkdownImage";
-import { useFileLinkBaseDir } from "./FileLinkBase";
+import { useFileLinkBaseDir, useLocalResourceUrl } from "./FileLinkBase";
 import { resolveMarkdownImageSrc } from "./markdownImageSrc";
 import { MarkdownImageGroupProvider, imageCountInChildren } from "./MarkdownImageGroup";
-import { localImageUrl } from "../../../../shared/localImage";
 import { markdownUrlTransform } from "./MarkdownLinkCore";
 import { remarkGfmNoSingleTilde, remarkRecoverLocalImages } from "../../utils/markdownPlugins";
 import { remarkRecoverInlineLinks } from "../../utils/markdownRecoverInlineLinks";
@@ -302,18 +301,20 @@ export const MarkdownStream = memo(function MarkdownStream(props: {
 	//   URL 规范化/清洗环节静默丢掉，到组件里只剩空串（那种 bug 表现为「图不显示且没有报错」）；
 	// - 解不出就返回空串，MarkdownImage 会降级成 alt 文本，不会出现空 src 白图。
 	const baseDir = useFileLinkBaseDir();
+	// 本地图片 URL 的宿主实现（桌面 pideck-file:// 协议 / Web /api/file-raw）
+	const toLocalResourceUrl = useLocalResourceUrl();
 	const urlTransform = useMemo(() => {
 		const fallback = props.urlTransform ?? markdownUrlTransform;
 		const streaming = Boolean(props.isStreaming);
 		return (url: string, key: string) => {
 			if (key !== "src") return fallback(url);
-			const resolved = resolveMarkdownImageSrc(url, { baseDir, toLocalUrl: localImageUrl }) ?? "";
+			const resolved = resolveMarkdownImageSrc(url, { baseDir, toLocalUrl: toLocalResourceUrl }) ?? "";
 			// 流式时不解析本地图：路径正写到一半（`C:\Users\a` → `.png`）会打空请求，
 			// 还会先闪一下「加载失败」。settle 后一次性解析（dsh 同样在 streaming 期间
 			// 跳过本地路径）。远程图不受影响。
 			return streaming && resolved.startsWith("pideck-file:") ? "" : resolved;
 		};
-	}, [baseDir, props.isStreaming, props.urlTransform]);
+	}, [baseDir, props.isStreaming, props.urlTransform, toLocalResourceUrl]);
 	const pipe: StreamdownPipe = useMemo(
 		() => ({
 			// 学 Proma：流式期间也用 static 模式（同步渲染）。streamdown 的 streaming 模式

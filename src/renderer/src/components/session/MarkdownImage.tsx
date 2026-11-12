@@ -1,8 +1,7 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { localImageUrl } from "../../../../shared/localImage";
 import { t } from "../../i18n";
-import { useFileLinkBaseDir } from "./FileLinkBase";
+import { useFileLinkBaseDir, useLocalResourceUrl } from "./FileLinkBase";
 import { ImageLightbox } from "./ImageLightbox";
 import { MarkdownImageHoverSave, MarkdownImageToolbar } from "./MarkdownImageActions";
 import { useMarkdownImageGroupCount } from "./MarkdownImageGroup";
@@ -31,7 +30,8 @@ import { resolveMarkdownImageSrc } from "./markdownImageSrc";
  */
 export const MarkdownImage = memo(function MarkdownImage(props: { destination: string; alt: string }) {
 	const baseDir = useFileLinkBaseDir();
-	const src = useMemo(() => resolveMarkdownImageSrc(props.destination, { baseDir, toLocalUrl: localImageUrl }), [props.destination, baseDir]);
+	const toLocalResourceUrl = useLocalResourceUrl();
+	const src = useMemo(() => resolveMarkdownImageSrc(props.destination, { baseDir, toLocalUrl: toLocalResourceUrl }), [props.destination, baseDir, toLocalResourceUrl]);
 	const [failedFor, setFailedFor] = useState<string | null>(null);
 	const [open, setOpen] = useState(false);
 	const close = useCallback(() => setOpen(false), []);

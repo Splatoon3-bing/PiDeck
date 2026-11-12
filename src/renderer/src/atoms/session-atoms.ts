@@ -1152,7 +1152,13 @@ export const clearSessionHistoryAtom = atom(null, (get, set, sessionId: string) 
 	return true;
 });
 function toAgentUiRequest(payload: Record<string, unknown>, agentId: string): AgentUiRequest | undefined {
-	const requestId = typeof payload.requestId === "string" ? payload.requestId : "";
+	const method = typeof payload.method === "string" ? payload.method : "";
+	const widgetKey = typeof payload.widgetKey === "string" ? payload.widgetKey : undefined;
+	// setWidget 是 fire-and-forget 状态帧，没有对话请求那种 requestId 语义：pi 的某些
+	// 版本/扩展下发时 id 为空，主进程照原样转成空 requestId，渲染层旧实现据此整帧
+	// 丢弃并保留上一帧 widgetLines —— 表现就是「任务已完成但列表没更新」。
+	// widgetKey 是这一帧的稳定身份，用它兜底（组件卡片类的请求仍严格要求 id）。
+	const requestId = typeof payload.requestId === "string" && payload.requestId.length > 0 ? payload.requestId : method === "setWidget" && widgetKey ? `widget:${widgetKey}` : "";
 	if (!requestId) return undefined;
 	const batchQuestions: AgentUiBatchQuestion[] | undefined = Array.isArray(payload.batchQuestions)
 		? payload.batchQuestions.reduce<AgentUiBatchQuestion[]>((questions, question) => {
@@ -1199,7 +1205,7 @@ function toAgentUiRequest(payload: Record<string, unknown>, agentId: string): Ag
 	return {
 		agentId,
 		requestId,
-		method: typeof payload.method === "string" ? payload.method : "",
+		method,
 		title: typeof payload.title === "string" ? payload.title : "",
 		options: Array.isArray(payload.options) ? payload.options.filter((option): option is string => typeof option === "string") : undefined,
 		placeholder: typeof payload.placeholder === "string" ? payload.placeholder : undefined,
@@ -1212,7 +1218,7 @@ function toAgentUiRequest(payload: Record<string, unknown>, agentId: string): Ag
 		message: typeof payload.message === "string" ? payload.message : undefined,
 		notifyType: payload.notifyType === "info" || payload.notifyType === "warning" || payload.notifyType === "error" ? payload.notifyType : undefined,
 		text: typeof payload.text === "string" ? payload.text : undefined,
-		widgetKey: typeof payload.widgetKey === "string" ? payload.widgetKey : undefined,
+		widgetKey,
 		widgetLines: Array.isArray(payload.widgetLines) ? payload.widgetLines.filter((line): line is string => typeof line === "string") : undefined,
 		widgetPlacement: payload.widgetPlacement === "aboveEditor" || payload.widgetPlacement === "belowEditor" ? payload.widgetPlacement : undefined,
 		batchQuestions: batchQuestions?.length ? batchQuestions : undefined,

@@ -12,12 +12,16 @@ import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
 const { toProjectRelative, classifyFileContentOutcome, WebFilePreview } = loadTsCommonJs("src/renderer/src/web/WebFilePreview.tsx", {
 	stubs: {
 		"@/components/session/MarkdownStream": { MarkdownStream: () => null },
+		// 预览的 md 分支会用 FileLinkBaseProvider 注入 Web 版本地图片解析；
+		// 这里只做 SSR 结构断言，Provider 透传 children 即可（真实链路会拖进 desktopApi）
+		"@/components/session/FileLinkBase": { FileLinkBaseProvider: ({ children }) => children },
 		"@/components/ui-shadcn/virtual-stack": { VirtualStack: () => null },
 		"@/i18n": { t: (key) => key },
 		"lucide-react": { Loader2: () => null, X: () => null },
 		"./useDismissOnBack": { useDismissOnBack: () => {} },
 		// SSR 不跑 effect：只要模块能解析，fetch 不会被真正调用
 		"./webApi": {
+			webFileRawUrl: (projectId, path) => `raw:${projectId}:${path}`,
 			fetchFileContent: async () => ({}),
 			fetchGitDiff: async () => null,
 			fetchGitStatus: async () => ({ repo: false, groups: null }),

@@ -262,7 +262,8 @@ export class VideoJobRunner {
 		} catch {
 			payload = null;
 		}
-		const parsed = parseVideoQueryResponse(payload);
+		// openai-videos 的产物地址不在响应里（要拼 /content 并带令牌），所以把上下文传进去
+		const parsed = parseVideoQueryResponse(payload, { family: credentials.protocol, baseUrl: record.baseUrl, apiKey: credentials.apiKey, taskId: record.taskId });
 		if (parsed.kind === "error") {
 			this.bumpQueryErrors(jobId, 0);
 			return;
@@ -276,7 +277,7 @@ export class VideoJobRunner {
 			return;
 		}
 		if (parsed.status === "succeeded" && parsed.artifactUrl) {
-			const videoRef = await this.downloadArtifact(parsed.artifactUrl);
+			const videoRef = await this.downloadArtifact(parsed.artifactUrl, parsed.artifactHeaders);
 			if (!videoRef) {
 				record.status = "failed";
 				record.errorDetail = "video download failed";
@@ -320,9 +321,16 @@ export class VideoJobRunner {
 	}
 
 	/** 流式下载产物并落盘。 */
-	private async downloadArtifact(url: string): Promise<string | null> {
+	/**
+	 * 拉取产物字节。
+	 *
+	 * headers 是 openai-videos 族必需的：它的取片地址是网关自己的
+	 * `/v1/videos/{id}/content`（Bearer 鉴权），不像 TokenDance 两族那样直接给
+	 * 带签名的裸 URL。其它族没有 headers，行为不变。
+	 */
+	private async downloadArtifact(url: string, headers?: Record<string, string>): Promise<string | null> {
 		try {
-			const response = await this.fetchImpl(url, { method: "GET", signal: AbortSignal.timeout(300_000) });
+			const response = await this.fetchImpl(url, { method: "GET", ...(headers ? { headers } : {}), signal: AbortSignal.timeout(300_000) });
 			if (!response.ok) {
 				this.deps.log("videogen", "artifact download rejected", { status: response.status });
 				return null;

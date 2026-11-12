@@ -1,7 +1,8 @@
 /**
  * 生视频 IPC 域：只做入参校验与装配。
  * 通道：videogen:submit / videogen:cancel / videogen:get-config /
- *       videogen:save-config / videogen:list-jobs（事件经 videogen:event 推送）。
+ *       videogen:save-config / videogen:list-jobs / videogen:list-models
+ *       （事件经 videogen:event 推送）。
  *
  * 凭据来自独立 VideoGenConfigStore（userData/videogen.json），不读 pi models.json。
  */
@@ -24,6 +25,8 @@ export function registerVideoGenIpc(deps: {
 	getConfig: () => Promise<unknown>;
 	saveConfig: (input: unknown) => Promise<{ ok: true; config: unknown } | { ok: false; error: string }>;
 	listJobs: (sessionId: string) => Array<unknown>;
+	/** 拉取供应商的视频模型能力目录（只对 openai-videos 有实现；不可用时返回空） */
+	listModels: (providerId: string) => Promise<{ ok: true; models: unknown[] } | { ok: false; error: string }>;
 	log: (message: string, ...args: unknown[]) => void;
 }) {
 	ipcMain.handle(ipcChannels.videogenGetConfig, async () => deps.getConfig());
@@ -37,6 +40,11 @@ export function registerVideoGenIpc(deps: {
 	ipcMain.handle(ipcChannels.videogenListJobs, async (_event, sessionId: unknown) => {
 		if (typeof sessionId !== "string" || !sessionId.trim()) return [];
 		return deps.listJobs(sessionId.trim());
+	});
+
+	ipcMain.handle(ipcChannels.videogenListModels, async (_event, providerId: unknown) => {
+		if (typeof providerId !== "string" || !providerId.trim()) return { ok: false, error: "invalid" };
+		return deps.listModels(providerId.trim());
 	});
 
 	ipcMain.handle(ipcChannels.videogenCancel, async (_event, jobId: unknown) => {
